@@ -86,10 +86,14 @@ select:focus,input:focus-visible,button:focus-visible{outline:2px solid var(--in
 .pl.video select{background:#0007;color:#fff;border-color:#fff3}
 .pl.video input[type=range]{accent-color:#fff}
 .pl.video .ctl button:hover{background:#fff2}
-.pl.busy::after,.pl.bad::after{content:attr(data-busy);position:absolute;inset:0;display:grid;place-items:center;padding:16px;text-align:center;background:#000b;color:#fff;font-size:14px}
+.pl.bad::after{content:attr(data-busy);position:absolute;inset:0;display:grid;place-items:center;padding:16px;text-align:center;background:#000b;color:#fff;font-size:14px}
 .pl.bad::after{content:attr(data-err)}
 .pl:fullscreen{border-radius:0;display:grid;place-items:center;background:#000}
 .pl:fullscreen video{max-height:100vh;height:100vh}
+.ov{display:none;position:absolute;inset:0;place-content:center;justify-items:center;gap:12px;padding:16px;text-align:center;background:#000c;color:#fff;font-size:14px}
+.pl.busy .ov{display:grid}
+.ov i{display:block;width:min(280px,70%);height:4px;border-radius:4px;background:#fff3;overflow:hidden}
+.ov b{display:block;height:100%;width:0;background:#fff;transition:width .2s}
 #orig{margin-top:28px}
 .oi{display:block;max-width:100%;max-height:70vh;margin:auto;border-radius:10px;border:1px solid var(--line)}
 body.viewer{padding:0;display:block}
@@ -184,7 +188,7 @@ async function load(f){
   rv=c==='audio'?128:0;tv=null;mode='a';initLocs();markFmt();renderC();showOrig();
 }
 function flash(m){const w=$('#warn');w.hidden=false;w.className='note err';w.textContent=m;$('#work').hidden=true;$('#drop').hidden=false;$('#warn').after&&$('#drop').after(w)}
-function reset(){blob=null;$('#orig').hidden=true;$('#origp').replaceChildren();$('#done').hidden=true;$('#warn').hidden=true;$('#warn').className='note warn';$('#work').append($('#warn'));$('#work').insertBefore($('#warn'),$('#go'));$('#status').textContent='';$('#prog').hidden=true}
+function reset(){blob=null;sweep();$('#orig').hidden=true;$('#origp').replaceChildren();$('#done').hidden=true;$('#warn').hidden=true;$('#warn').className='note warn';$('#work').append($('#warn'));$('#work').insertBefore($('#warn'),$('#go'));$('#status').textContent='';$('#prog').hidden=true}
 $('#file').onchange=e=>e.target.files[0]&&load(e.target.files[0]);
 $('#clear').onclick=()=>{reset();file=null;$('#file').value='';$('#work').hidden=true;$('#drop').hidden=false};
 const dz=$('#drop');
@@ -222,7 +226,8 @@ function preWarn(){
 
 /* ---------- engines ---------- */
 function setStatus(t){$('#status').textContent=t}
-function setProg(p){$('#prog i').style.width=Math.min(100,Math.max(0,p*100))+'%'}
+let onProg=null;
+function setProg(p){$('#prog i').style.width=Math.min(100,Math.max(0,p*100))+'%';onProg&&onProg(Math.min(1,Math.max(0,p)))}
 let MB;
 async function loadMB(){
   if(MB)return MB;setStatus('Loading media engine…');
@@ -399,12 +404,23 @@ $('#theme').onclick=()=>{const t=document.documentElement.dataset.theme==='dark'
 /* ---------- player (original preview, result preview, file-launch viewer) ---------- */
 const I={play:'<path fill="currentColor" stroke="none" d="M8 5v14l11-7z"/>',pause:'<path fill="currentColor" stroke="none" d="M7 5h4v14H7zM13 5h4v14h-4z"/>',loop:'<path d="M17 3l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 21l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/>',vol:'<path d="M4 9v6h4l5 4V5L8 9zM16.5 8.5a5 5 0 0 1 0 7"/>',mute:'<path d="M4 9v6h4l5 4V5L8 9zM17 9l4 6M21 9l-4 6"/>',pip:'<rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="12" width="6" height="4" rx="1" fill="currentColor"/>',fs:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'};
 const svg=n=>`<svg viewBox="0 0 24 24">${I[n]}</svg>`,tf=s=>isFinite(s)?`${s/60|0}:${String(Math.floor(s%60)).padStart(2,'0')}`:'0:00';
+/* Large files (>400 MB): previews are re-wrapped in chunks into a temp file on disk (origin-private storage), never held in memory. */
+const tmps=[],ready=sweep(true);
+async function sweep(all){
+  const old=[...tmps];tmps.length=0;
+  try{const d=await navigator.storage.getDirectory();for await(const k of d.keys())if(k.startsWith('optic-')&&(all||old.includes(k)))await d.removeEntry(k).catch(()=>{})}catch{}
+}
+async function prev(f,ext,kind,o){
+  let fh=null;
+  if(f.size>4e8&&navigator.storage&&navigator.storage.getDirectory)try{await ready;const d=await navigator.storage.getDirectory(),n=`optic-${Date.now()}.${ext}`;tmps.push(n);fh=await d.getFileHandle(n,{create:true});await(await fh.createWritable()).abort()}catch{fh=null}
+  return(await viaMB(f,ext,kind,o,fh)).blob;
+}
 function mkPlayer(f,kind,o={}){
   const el=document.createElement(kind),w=document.createElement('div'),bar=document.createElement('div'),cache={};let url,raf,fell=0;
   w.className=`pl ${kind}`;bar.className='bar';el.playsInline=true;el.preload='metadata';
   const set=b=>{url&&URL.revokeObjectURL(url);el.src=url=URL.createObjectURL(b)};
   bar.innerHTML=`<div class="seek"><span class="tm">0:00</span><input type="range" class="sk" min="0" max="1000" value="0" aria-label="Seek"><span class="tm">0:00</span></div><div class="ctl"><button data-a="p" title="Play / pause" aria-label="Play or pause">${svg('play')}</button>${kind==='audio'?`<button data-a="l" title="Loop" aria-label="Loop">${svg('loop')}</button>`:''}<button data-a="m" title="Mute" aria-label="Mute">${svg('vol')}</button><input type="range" class="vl" min="0" max="1" step=".01" value="1" aria-label="Volume"><span class="gap"></span><select class="sp" title="Playback speed">${[.5,.75,1,1.25,1.5,2].map(s=>`<option value="${s}"${s===1?' selected':''}>${s}×</option>`).join('')}</select>${kind==='video'?`<select class="ql" title="Quality"></select>${document.pictureInPictureEnabled?`<button data-a="i" title="Picture in picture" aria-label="Picture in picture">${svg('pip')}</button>`:''}<button data-a="f" title="Fullscreen" aria-label="Fullscreen">${svg('fs')}</button>`:''}</div>`;
-  w.append(el,bar);const q=s=>bar.querySelector(s),pb=q('[data-a=p]'),sk=q('.sk'),tm=bar.querySelectorAll('.tm'),ql=q('.ql');
+  const ov=document.createElement('div');ov.className='ov';ov.innerHTML='<span></span><i><b></b></i>';w.append(el,bar,ov);const q=s=>bar.querySelector(s),pb=q('[data-a=p]'),sk=q('.sk'),tm=bar.querySelectorAll('.tm'),ql=q('.ql');
   const upd=()=>{pb.innerHTML=svg(el.paused?'play':'pause');w.classList.toggle('playing',!el.paused)};
   el.onplay=el.onpause=el.onended=upd;
   el.ontimeupdate=el.ondurationchange=()=>{if(!sk.drag&&el.duration)sk.value=el.currentTime/el.duration*1000;tm[0].textContent=tf(el.currentTime);tm[1].textContent=tf(el.duration)};
@@ -418,15 +434,16 @@ function mkPlayer(f,kind,o={}){
     if(a==='m')el.muted=!el.muted;
     if(a==='i')document.pictureInPictureElement?document.exitPictureInPicture():el.requestPictureInPicture().catch(()=>{});
     if(a==='f')document.fullscreenElement?document.exitFullscreen():w.requestFullscreen().catch(()=>{})};
-  const busy=async(msg,fn)=>{w.dataset.busy=msg;w.classList.add('busy');try{await fn()}catch(e){w.dataset.err=why(e);w.classList.add('bad')}w.classList.remove('busy');setStatus('')};
+  const busy=async(msg,fn)=>{const sp=ov.firstChild,bb=ov.lastChild.firstChild;sp.textContent=msg;bb.style.width='0';w.classList.add('busy');onProg=p=>{sp.textContent=`${msg} ${Math.round(p*100)}%`;bb.style.width=p*100+'%'};
+    try{await fn()}catch(e){w.dataset.err=why(e);w.classList.add('bad')}onProg=null;w.classList.remove('busy');setStatus('')};
   /* browsers can often decode the codec but not the container (e.g. .ts, .mkv): let Mediabunny re-wrap it */
   el.onerror=()=>{if(fell++){w.dataset.err='This browser can’t play this file.';return w.classList.add('bad')}
-    busy('Preparing preview…',async()=>set((await viaMB(f,kind==='video'?'mp4':'wav',kind,{on:false},null)).blob))};
+    busy(f.size>4e8?'Preparing large-file preview in chunks…':'Preparing preview…',async()=>set(await prev(f,kind==='video'?'mp4':'wav',kind,{on:false})))};
   if(kind==='video'){
     el.onclick=()=>pb.click();
     el.onloadedmetadata=()=>{if(ql.options.length)return;const h=el.videoHeight;ql.innerHTML=`<option value="0">Original${h?' '+h+'p':''}</option>`+[1080,720,480,360,240].filter(x=>x<h).map(x=>`<option value="${x}">${x}p</option>`).join('')};
     ql.onchange=()=>{const h=+ql.value,t0=el.currentTime,pl=!el.paused;
-      busy(h?`Preparing ${h}p…`:'Switching…',async()=>{if(!(h in cache))cache[h]=h?(await viaMB(f,'mp4','video',{on:true,mode:'a',res:h},null)).blob:f;
+      busy(h?`Preparing ${h}p…`:'Switching…',async()=>{if(!(h in cache))cache[h]=h?await prev(f,'mp4','video',{on:true,mode:'a',res:h}):f;
         el.addEventListener('loadeddata',()=>{el.currentTime=t0;if(pl)el.play()},{once:true});set(cache[h])})};
   }
   set(f);if(o.auto)el.play().catch(()=>{el.muted=true;el.play().catch(()=>{})});
