@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OPTIC</title>
+<link rel="manifest" href="manifest.json"><meta name="theme-color" content="#17171a"><link rel="apple-touch-icon" href="icon-192.png">
+<script>(()=>{let t;try{t=localStorage.getItem('cv-theme')}catch{}if(t!=='dark'&&t!=='light'){t=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';try{localStorage.setItem('cv-theme',t)}catch{}}document.documentElement.dataset.theme=t})()</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2317171a'/%3E%3Cpath d='M9 16h14m-5-5 5 5-5 5' stroke='%23fff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#f7f6f3;--surface:#fff;--ink:#17171a;--mute:#6f6e6a;--line:#e4e2dc;--on:#fff;--warn:#8a5200;--warnbg:#fbf3e2;--err:#b3261e;color-scheme:light}
+:root[data-theme=dark]{--bg:#121211;--surface:#1b1b1a;--ink:#f0efeb;--mute:#8d8c86;--line:#2e2d2a;--on:#121211;--warn:#e0b05a;--warnbg:#2a2415;--err:#f2867e;color-scheme:dark}
+*,*::before,*::after{transition:background-color .4s ease,color .4s ease,border-color .4s ease,opacity .15s,transform .15s}
+*{box-sizing:border-box;margin:0}
+[hidden]{display:none!important}
+body{font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;padding:56px 20px;display:flex;justify-content:center;-webkit-font-smoothing:antialiased}
+main{width:100%;max-width:520px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
+h1{font-size:17px;font-weight:700;letter-spacing:.14em}
+.sub{color:var(--mute);font-size:13px;margin-bottom:22px}
+.theme{position:relative;width:36px;height:36px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);overflow:hidden}
+.theme:hover{border-color:var(--mute)}
+.theme svg{position:absolute;inset:0;margin:auto;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:transform .55s cubic-bezier(.4,0,.2,1),opacity .4s ease}
+.moon,[data-theme=dark] .sun{transform:rotate(-90deg) scale(.3);opacity:0}
+[data-theme=dark] .moon{transform:none;opacity:1}
+#locs{margin-top:2px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px}
+#drop{display:block;padding:48px 24px;text-align:center;border-style:dashed;cursor:pointer}
+#drop:hover,#drop.over{border-color:var(--ink)}
+#drop.over{transform:scale(1.01)}
+#drop b{display:block;font-weight:560;font-size:16px;margin-bottom:2px}
+#drop small,.hint,#fmeta,.stat{color:var(--mute);font-size:13px}
+.file{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px}
+.file>div:first-child{min-width:0}
+#fname{font-weight:560;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button{font:inherit;color:inherit;cursor:pointer}
+#clear{border:0;background:none;font-size:22px;line-height:1;color:var(--mute);padding:4px 8px;border-radius:8px}
+#clear:hover{color:var(--ink);background:var(--bg)}
+.lbl{font-size:12px;color:var(--mute);margin:22px 0 8px;letter-spacing:.04em;text-transform:uppercase}
+.pills{display:flex;flex-wrap:wrap;gap:6px}
+.pills button{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:6px 13px;font-size:14px;transition:border-color .12s}
+.pills button:hover{border-color:var(--mute)}
+.pills button.on{background:var(--ink);color:var(--on);border-color:var(--ink)}
+.cmp{margin-top:16px;padding:0 16px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 0;cursor:pointer}
+#cbody{padding:2px 0 16px;display:grid;gap:12px}
+input[type=checkbox]{appearance:none;width:34px;height:20px;border-radius:10px;background:var(--line);position:relative;cursor:pointer;transition:background .15s;flex:none}
+input[type=checkbox]::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--surface);transition:transform .15s;box-shadow:0 1px 2px #0003}
+input[type=checkbox]:checked{background:var(--ink)}
+input[type=checkbox]:checked::after{transform:translateX(14px)}
+select,input[type=number]{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:8px 10px;min-width:0}
+select:focus,input:focus-visible,button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.t{display:flex;gap:8px}.t input{flex:1}
+.note{margin-top:14px;padding:10px 13px;border-radius:10px;font-size:13.5px;background:var(--bg);border:1px solid var(--line);color:var(--mute)}
+.note.warn{background:var(--warnbg);color:var(--warn);border-color:transparent}
+.note.err{color:var(--err)}
+.primary{width:100%;margin-top:20px;padding:13px;border:0;border-radius:11px;background:var(--ink);color:var(--on);font-weight:580;transition:opacity .15s}
+.primary:hover{opacity:.88}.primary:disabled{opacity:.4;cursor:default}
+#prog{height:3px;background:var(--line);border-radius:3px;margin-top:14px;overflow:hidden}
+#prog i{display:block;height:100%;width:0;background:var(--ink);transition:width .2s}
+#status{font-size:13px;color:var(--mute);margin-top:8px;min-height:20px}
+#done{margin-top:24px;padding:16px}
+#pv{display:grid;place-items:center;background:var(--bg);border-radius:10px;overflow:hidden;min-height:90px;padding:8px}
+#pv img,#pv video{max-width:100%;max-height:320px;border-radius:6px;display:block}
+#pv audio{width:100%}
+.stat{display:flex;justify-content:space-between;margin:12px 0 4px;font-variant-numeric:tabular-nums}
+.stat b{color:var(--ink);font-weight:560}
+#locs .hint{margin-top:8px}
+.pl{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden;line-height:1.4}
+.pl video{display:block;width:100%;max-height:62vh;background:#000;object-fit:contain}
+.pl audio{display:none}
+.bar{padding:10px 14px 12px;display:grid;gap:6px}
+.seek,.ctl{display:flex;align-items:center;gap:8px}
+.tm{font-size:12px;font-variant-numeric:tabular-nums;color:var(--mute);min-width:34px}
+.gap{flex:1}
+.ctl button{width:34px;height:34px;display:grid;place-items:center;border:0;background:none;border-radius:8px;color:inherit}
+.ctl button:hover{background:var(--bg)}
+.ctl button.on{background:var(--ink);color:var(--on)}
+.ctl svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ctl select{padding:4px 6px;font-size:13px}
+.pl input[type=range]{accent-color:var(--ink);flex:1;min-width:0}
+.pl .vl{flex:none;width:70px}
+.pl.video .bar{position:absolute;inset:auto 0 0;background:linear-gradient(transparent,#000b);color:#fff;transition:opacity .25s}
+.pl.video.playing:not(:hover):not(:focus-within) .bar{opacity:0}
+.pl.video .tm{color:#ddd}
+.pl.video select{background:#0007;color:#fff;border-color:#fff3}
+.pl.video input[type=range]{accent-color:#fff}
+.pl.video .ctl button:hover{background:#fff2}
+.pl.busy::after,.pl.bad::after{content:attr(data-busy);position:absolute;inset:0;display:grid;place-items:center;padding:16px;text-align:center;background:#000b;color:#fff;font-size:14px}
+.pl.bad::after{content:attr(data-err)}
+.pl:fullscreen{border-radius:0;display:grid;place-items:center;background:#000}
+.pl:fullscreen video{max-height:100vh;height:100vh}
+#orig{margin-top:28px}
+.oi{display:block;max-width:100%;max-height:70vh;margin:auto;border-radius:10px;border:1px solid var(--line)}
+body.viewer{padding:0;display:block}
+body.viewer main{display:none}
+#vwr{position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);overflow:hidden}
+#vwr img{display:block;max-width:100vw;max-height:100vh;object-fit:contain}
+#vwr .pl.video{border:0;border-radius:0;background:#000;max-width:100vw;max-height:100vh;display:grid}
+#vwr .pl.video video{width:auto;height:auto;max-width:100vw;max-height:100vh}
+#vwr .pl.audio{width:min(680px,92vw)}
+#vwr .pl.audio .bar{gap:16px;padding:24px 28px}
+#vwr .pl.audio .ctl button{width:54px;height:54px}
+#vwr .pl.audio .ctl svg{width:27px;height:27px}
+#vwr .pl.audio .tm{font-size:14px;min-width:42px}
+#vwr .pl.audio select{font-size:15px}
+.vt{padding:26px 28px 0;font-size:18px;font-weight:560;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+footer{margin-top:36px;text-align:center;font-size:12px;color:var(--mute)}
+</style>
+</head>
+<body>
+<main>
+<header><h1>OPTIC</h1><button id="theme" class="theme" aria-label="Toggle light/dark mode" title="Toggle light/dark mode"><svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button></header>
+<p class="sub">Offline Player &amp; Transcoder for Images &amp; Clips. Runs on your device, nothing is uploaded.</p>
+
+<label id="drop" class="card"><input id="file" type="file" hidden><b>Drop a file here to convert or view</b><small>or click to browse · images, audio, video</small></label>
+
+<section id="work" hidden>
+  <div class="card file"><div><div id="fname"></div><div id="fmeta"></div></div><button id="clear" title="Remove file" aria-label="Remove file">×</button></div>
+  <p id="mismatch" class="note" hidden></p>
+  <div class="lbl">Convert to</div><div id="fmts" class="pills"></div>
+  <div class="card cmp"><label class="row"><span>Compress</span><input type="checkbox" id="cz"></label><div id="cbody" hidden></div></div>
+  <p id="warn" class="note warn" hidden></p>
+  <div id="locs">
+    <div class="lbl">Save to</div><div class="pills" id="locp"></div><p class="hint" id="lochint"></p>
+  </div>
+  <button id="go" class="primary">Convert</button>
+  <div id="prog" hidden><i></i></div><p id="status" role="status"></p>
+</section>
+
+<section id="done" class="card" hidden>
+  <div id="pv"></div>
+  <div class="stat"><span id="sizes"></span><b id="delta"></b></div>
+  <button id="save" class="primary">Save file</button>
+</section>
+<section id="orig" hidden><div class="lbl">Original</div><div id="origp"></div></section>
+<footer>Large files are read and processed in small pieces to keep your device responsive.</footer>
+</main>
+
+<div id="vwr" hidden></div>
+<script>
+const $=s=>document.querySelector(s);
+const FMT={image:{png:'PNG',jpg:'JPG',webp:'WebP',avif:'AVIF',bmp:'BMP',gif:'GIF',tiff:'TIFF',ico:'ICO'},audio:{mp3:'MP3',wav:'WAV',ogg:'OGG',opus:'Opus',m4a:'M4A',flac:'FLAC',aac:'AAC'},video:{mp4:'MP4',webm:'WebM',mov:'MOV',mkv:'MKV'}};
+const MIME={png:'image/png',jpg:'image/jpeg',webp:'image/webp',avif:'image/avif',bmp:'image/bmp',gif:'image/gif',tiff:'image/tiff',ico:'image/x-icon',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',opus:'audio/ogg',m4a:'audio/mp4',flac:'audio/flac',aac:'audio/aac',mp4:'video/mp4',webm:'video/webm',mov:'video/quicktime',mkv:'video/x-matroska',avi:'video/x-msvideo'};
+const LOSSLESS=['wav','flac'];
+const RES={image:[0,3840,2560,1920,1280,960,640],video:[0,1080,720,480,360,240],audio:[320,256,192,128,96,64,48,32]};
+const fmt=b=>b>=1e9?(b/1e9).toFixed(2)+' GB':b>=1e6?(b/1e6).toFixed(1)+' MB':Math.max(1,Math.round(b/1e3))+' KB';
+const ua=navigator.userAgent,os=/CrOS/.test(ua)?'cros':/Windows/.test(ua)?'win':/Mac/.test(ua)?'mac':'other';
+const L2={cros:['Google Drive','Pick Google Drive in the sidebar of the save dialog.'],win:['OneDrive','Pick OneDrive in the sidebar of the save dialog.'],mac:['iCloud Drive','Pick iCloud Drive in the sidebar of the save dialog.'],other:['Choose folder','A save dialog lets you pick any folder.']}[os];
+const canEnc=t=>{try{return document.createElement('canvas').toDataURL(t).startsWith('data:'+t)}catch{return false}};
+let file,cat,label,ext,blob,mode='a',rv=0,tv=null,tu=1e6,loc='dl',ff,ffLog='';
+try{loc=localStorage.getItem('cv-loc')||'dl'}catch{}
+
+/* ---------- file intake ---------- */
+async function sniff(f){
+  const b=new Uint8Array(await f.slice(0,200).arrayBuffer()),a=(o,t)=>[...t].every((c,i)=>b[o+i]===c.charCodeAt(0));
+  if(a(0,'\x89PNG'))return['image','PNG'];
+  if(b[0]===255&&b[1]===216)return['image','JPEG'];
+  if(a(0,'GIF8'))return['image','GIF'];
+  if(a(0,'BM'))return['image','BMP'];
+  if(a(0,'II*\0')||a(0,'MM\0*'))return['image','TIFF'];
+  if(a(0,'RIFF')){if(a(8,'WEBP'))return['image','WebP'];if(a(8,'WAVE'))return['audio','WAV'];if(a(8,'AVI '))return['video','AVI'];}
+  if(a(4,'ftyp')){const br=String.fromCharCode(...b.slice(8,12));
+    if(/^avi[fs]/.test(br))return['image','AVIF'];if(/^(heic|heix|mif1)/.test(br))return['image','HEIC'];
+    if(/^M4[AB] /.test(br))return['audio','M4A'];return['video',br==='qt  '?'MOV':'MP4']}
+  if((b[0]===71&&b[188]===71)||(b[4]===71&&b[196]===71))return['video','MPEG-TS'];
+  if(a(0,'\x1aE\xdf\xa3'))return['video','WebM/MKV'];
+  if(a(0,'OggS'))return['audio','OGG'];
+  if(a(0,'fLaC'))return['audio','FLAC'];
+  if(a(0,'ID3')||(b[0]===255&&(b[1]&224)===224))return['audio','MP3'];
+  const t=f.type.split('/')[0];return[['image','audio','video'].includes(t)?t:null,(f.name.split('.').pop()||'').toUpperCase()];
+}
+async function load(f){
+  reset();const[c,l]=await sniff(f);
+  if(!c){return flash('That file type isn’t supported. Try an image, audio or video file.')}
+  file=f;cat=c;label=l;$('#drop').hidden=true;$('#work').hidden=false;
+  $('#fname').textContent=f.name;$('#fmeta').textContent=`${fmt(f.size)} · ${l} ${c}`;
+  const e=(f.name.split('.').pop()||'').toLowerCase(),n={jpg:'jpeg',tif:'tiff',mkv:'webm/mkv',webm:'webm/mkv',oga:'ogg',m4v:'mp4',qt:'mov'}[e]||e,mm=$('#mismatch');
+  mm.hidden=l.toLowerCase().includes(n)||!f.name.includes('.');
+  mm.textContent=`This file is named .${e} but its contents are ${l}. Convertify goes by the contents, so converting will produce a genuine file.`;
+  const keys=await fmtKeys(c),cur=l.toLowerCase();
+  ext=keys.find(k=>!cur.startsWith(k==='jpg'?'jpeg':k))||keys[0];
+  $('#fmts').innerHTML=keys.map(k=>`<button data-k="${k}">${FMT[c][k]}</button>`).join('');
+  rv=c==='audio'?128:0;tv=null;mode='a';initLocs();markFmt();renderC();showOrig();
+}
+function flash(m){const w=$('#warn');w.hidden=false;w.className='note err';w.textContent=m;$('#work').hidden=true;$('#drop').hidden=false;$('#warn').after&&$('#drop').after(w)}
+function reset(){blob=null;$('#orig').hidden=true;$('#origp').replaceChildren();$('#done').hidden=true;$('#warn').hidden=true;$('#warn').className='note warn';$('#work').append($('#warn'));$('#work').insertBefore($('#warn'),$('#go'));$('#status').textContent='';$('#prog').hidden=true}
+$('#file').onchange=e=>e.target.files[0]&&load(e.target.files[0]);
+$('#clear').onclick=()=>{reset();file=null;$('#file').value='';$('#work').hidden=true;$('#drop').hidden=false};
+const dz=$('#drop');
+['dragenter','dragover'].forEach(t=>addEventListener(t,e=>{e.preventDefault();dz.classList.add('over')}));
+['dragleave','drop'].forEach(t=>addEventListener(t,e=>{e.preventDefault();dz.classList.remove('over')}));
+addEventListener('drop',e=>e.dataTransfer.files[0]&&load(e.dataTransfer.files[0]));
+
+/* ---------- format + compression UI ---------- */
+function markFmt(){document.querySelectorAll('#fmts button').forEach(b=>b.classList.toggle('on',b.dataset.k===ext));if($('#locp').firstChild)markLoc()}
+$('#fmts').onclick=e=>{const k=e.target.dataset.k;if(!k)return;ext=k;markFmt();$('#done').hidden=true;renderC()};
+$('#cz').onchange=()=>{$('#cbody').hidden=!$('#cz').checked;renderC()};
+function opts(){
+  const on=$('#cz').checked&&!(cat==='audio'&&LOSSLESS.includes(ext));
+  return{on,mode,res:rv,T:(+($('#tv')?.value??tv)||0)*tu}
+}
+function renderC(){
+  const el=$('#cbody');$('#cbody').hidden=!$('#cz').checked;
+  if(cat==='audio'&&LOSSLESS.includes(ext)){el.innerHTML='<p class="hint">Lossless formats can’t be compressed this way. Choose MP3, Opus, AAC, M4A or OGG to reduce size.</p>';return preWarn()}
+  if(tv==null){if(file.size>=2e6){tv=+(file.size/2e6).toFixed(1);tu=1e6}else{tv=Math.max(1,Math.round(file.size/2e3));tu=1e3}}
+  const lb=v=>cat==='audio'?v+' kbps':!v?'Original size':cat==='video'?v+'p':v+' px, longest side';
+  el.innerHTML=`<div class="pills"><button data-m="a" class="${mode==='a'?'on':''}">${cat==='audio'?'Bitrate':'Resolution'}</button><button data-m="t" class="${mode==='t'?'on':''}">Target size</button></div>`+
+  (mode==='a'?`<select id="rs">${RES[cat].map(v=>`<option value="${v}"${v===rv?' selected':''}>${lb(v)}</option>`).join('')}</select>`
+  :`<div class="t"><input id="tv" type="number" min="1" step="any" value="${tv}"><select id="tu"><option value="1000"${tu===1e3?' selected':''}>KB</option><option value="1000000"${tu===1e6?' selected':''}>MB</option></select></div><p class="hint">Original: ${fmt(file.size)}. Convertify lowers quality and size automatically to get under this.</p>`);
+  preWarn();
+}
+$('#cbody').onclick=e=>{const m=e.target.dataset.m;if(m){mode=m;renderC()}};
+$('#cbody').oninput=e=>{if(e.target.id==='rs')rv=+e.target.value;if(e.target.id==='tv')tv=+e.target.value;if(e.target.id==='tu')tu=+e.target.value;preWarn()};
+function showWarn(m){const w=$('#warn');w.hidden=!m;w.className='note warn';w.innerHTML=Array.isArray(m)?m.join('<br>'):m||''}
+function preWarn(){
+  const o=opts(),w=[];
+  if(o.on&&o.mode==='t'&&o.T){if(o.T>=file.size)w.push('That target isn’t smaller than the original file.');else if(o.T<file.size*.05)w.push('That’s under 5% of the original size. Expect heavy quality loss, and the target may not be reachable.')}
+  if(o.on&&o.mode==='a'&&cat==='audio'&&o.res<=48)w.push('At this bitrate audio will sound muffled and speech may be hard to understand.');
+  showWarn(w);
+}
+
+/* ---------- engines ---------- */
+function setStatus(t){$('#status').textContent=t}
+function setProg(p){$('#prog i').style.width=Math.min(100,Math.max(0,p*100))+'%'}
+let MB;
+async function loadMB(){
+  if(MB)return MB;setStatus('Loading media engine…');
+  const U='https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.';
+  try{const s=await(await fetch(U+'cjs')).text(),m={exports:{}},g=new Function('module','exports',s+'\n;return typeof Mediabunny!=="undefined"?Mediabunny:undefined')(m,m.exports);MB=g||m.exports;if(!MB.Input)throw 0}
+  catch{try{MB=await import(U+'mjs')}catch{throw Error('Couldn’t load the media engine from the CDN. Check your connection (or any content blocker), then try again.')}}
+  return MB;
+}
+async function fmtKeys(c){
+  let k=Object.keys(FMT[c]);
+  if(c==='image')return k.filter(x=>x==='webp'||x==='avif'?canEnc(MIME[x]):1);
+  if(c==='audio')try{const M=await loadMB(),cd={m4a:'aac',aac:'aac',ogg:'opus',opus:'opus',flac:'flac'},ok=await Promise.all(k.map(x=>cd[x]?M.canEncodeAudio(cd[x]):1));k=k.filter((_,i)=>ok[i])}catch{}
+  return k;
+}
+function abr(o,dur,mn,w,def){
+  let kb=o.on&&o.mode==='a'?o.res:def;const T=o.on&&o.mode==='t'?o.T:0;
+  if(T&&!dur)w.push('Couldn’t read the audio length, so the target size was ignored.');
+  if(T&&dur){kb=Math.min(320,Math.floor(T*8/dur/1000*.97));if(kb<mn){kb=mn;w.push('That size is too small for audio this long. It will come out larger than the target.')}}
+  if(kb<48)w.push('Very low bitrate: expect muffled audio that may be hard to understand.');
+  return kb;
+}
+/* Audio + video: WebCodecs via Mediabunny. The input is read in slices and, for big files, the output is streamed straight to disk. */
+async function viaMB(file,ext,cat,o,fh){
+  const M=await loadMB(),w=[],T=o.on&&o.mode==='t'?o.T:0,res=o.on&&o.mode==='a'?o.res:0,cfg={};
+  setStatus('Reading file…');
+  const input=new M.Input({source:new M.BlobSource(file),formats:M.ALL_FORMATS});let dur=0,vt=null;
+  try{dur=await input.computeDuration();if(cat==='video')vt=await input.getPrimaryVideoTrack()}
+  catch{throw Error(`This file’s contents couldn’t be read as ${cat}. It may be damaged, incomplete, or in a format this browser engine doesn’t know.`)}
+  if(cat==='video'&&!vt)throw Error('No video track was found in this file.');
+  if(cat==='video'){
+    const H0=vt.displayHeight,rh=res&&res<H0?res:0,H=rh||H0,v={};if(rh)v.height=rh;
+    if(T&&!dur)w.push('Couldn’t read the video length, so the target size was ignored.');
+    if(T&&dur){const tot=T*8/dur/1000,ab=Math.round(Math.min(128,Math.max(24,tot*.12)));let vb=Math.floor(tot*.95-ab);
+      if(vb<40){vb=40;w.push('That size is too small for a video this long. It will come out larger than the target.')}
+      if(vb*1000/(vt.displayWidth*H/H0*H*30)<.03)w.push('Very heavy compression: expect blocky video that may be unwatchable. Lowering the resolution as well will help.');
+      v.bitrate=vb*1000;cfg.audio={bitrate:ab*1000}}
+    if(Object.keys(v).length)cfg.video=v;
+  }else{
+    cfg.audio={codec:{m4a:'aac',aac:'aac',ogg:'opus',opus:'opus',flac:'flac',wav:'pcm-s16'}[ext]};
+    if(!LOSSLESS.includes(ext))cfg.audio.bitrate=abr(o,dur,16,w,ext==='ogg'||ext==='opus'?128:192)*1000;
+  }
+  const F={mp4:'Mp4',mov:'Mov',mkv:'Mkv',webm:'WebM',m4a:'Mp4',aac:'Adts',ogg:'Ogg',opus:'Ogg',flac:'Flac',wav:'Wav'}[ext];let wr;
+  try{
+    if(fh)wr=await fh.createWritable();
+    const output=new M.Output({format:new M[F+'OutputFormat'](),target:fh?new M.StreamTarget(wr):new M.BufferTarget()}),conv=await M.Conversion.init({input,output,...cfg});
+    const lost=conv.discardedTracks.map(d=>`${d.track.type} track (${String(d.reason).replace(/_/g,' ')})`).join(', ');
+    if(!conv.isValid)throw Error(`Your browser can’t convert this file: ${lost||'no usable tracks'}. The codec inside may not be supported by this browser. Try Chrome or Edge, or a different output format.`);
+    if(lost)w.push('Left out because they couldn’t be converted: '+lost+'.');
+    setStatus('Converting…');conv.onProgress=setProg;await conv.execute();
+    if(wr)await wr.close().catch(()=>{});
+    return{blob:fh?await fh.getFile():new Blob([output.target.buffer],{type:MIME[ext]}),warn:w};
+  }catch(e){if(wr)await wr.abort().catch(()=>{});throw e}
+}
+async function viaMP3(file,o){
+  if(!window.lamejs)await new Promise((ok,no)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js';s.onload=ok;s.onerror=()=>no(Error('Couldn’t load the MP3 encoder from the CDN. Check your connection and try again.'));document.head.append(s)});
+  setStatus('Decoding audio…');const w=[],ac=new(window.AudioContext||webkitAudioContext)();let buf;
+  try{buf=await ac.decodeAudioData(await file.arrayBuffer())}catch{throw Error('Your browser couldn’t decode this audio. It may be damaged or use a codec the browser doesn’t support.')}finally{ac.close()}
+  const kb=abr(o,buf.duration,32,w,192),ch=Math.min(2,buf.numberOfChannels),enc=new lamejs.Mp3Encoder(ch,buf.sampleRate,kb),parts=[],L=buf.getChannelData(0),R=ch>1?buf.getChannelData(1):null;
+  const i16=a=>{const r=new Int16Array(a.length);for(let i=0;i<a.length;i++)r[i]=Math.max(-1,Math.min(1,a[i]))*32767;return r};
+  setStatus('Encoding MP3…');
+  for(let i=0;i<L.length;i+=73728){const l=i16(L.subarray(i,i+73728)),d=R?enc.encodeBuffer(l,i16(R.subarray(i,i+73728))):enc.encodeBuffer(l);if(d.length)parts.push(d);setProg(i/L.length);await new Promise(r=>setTimeout(r))}
+  parts.push(enc.flush());return{blob:new Blob(parts,{type:'audio/mpeg'}),warn:w};
+}
+async function ico(c){
+  const p=new Uint8Array(await(await new Promise(r=>c.toBlob(r,'image/png'))).arrayBuffer()),u=new Uint8Array(22+p.length),v=new DataView(u.buffer);
+  v.setUint16(2,1,true);v.setUint16(4,1,true);u[6]=c.width>=256?0:c.width;u[7]=c.height>=256?0:c.height;v.setUint16(10,1,true);v.setUint16(12,32,true);v.setUint32(14,p.length,true);v.setUint32(18,22,true);u.set(p,22);
+  return new Blob([u],{type:'image/x-icon'});
+}
+function tiff(c){
+  const w=c.width,h=c.height,n=w*h*4,u=new Uint8Array(154+n),v=new DataView(u.buffer),x=c.getContext('2d');
+  u[0]=u[1]=73;v.setUint16(2,42,true);v.setUint32(4,8,true);v.setUint16(8,11,true);
+  [[256,4,w],[257,4,h],[258,3,146,4],[259,3,1],[262,3,2],[273,4,154],[277,3,4],[278,4,h],[279,4,n],[284,3,1],[338,3,2]].forEach((e,i)=>{const o=10+i*12;v.setUint16(o,e[0],true);v.setUint16(o+2,e[1],true);v.setUint32(o+4,e[3]||1,true);e[1]===3&&!e[3]?v.setUint16(o+8,e[2],true):v.setUint32(o+8,e[2],true)});
+  for(let i=0;i<4;i++)v.setUint16(146+i*2,8,true);
+  for(let y=0;y<h;y+=256)u.set(x.getImageData(0,y,w,Math.min(256,h-y)).data,154+y*w*4);
+  return new Blob([u],{type:'image/tiff'});
+}
+function gif(c){
+  const w=c.width,h=c.height,x=c.getContext('2d'),B=[0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5],px=new Uint8Array(w*h);
+  for(let y0=0;y0<h;y0+=256){const r=Math.min(256,h-y0),d=x.getImageData(0,y0,w,r).data;
+    for(let y=0;y<r;y++)for(let i=0;i<w;i++){const o=(y*w+i)*4,t=(B[((y0+y)&3)*4+(i&3)]+.5)/16,q=v=>Math.min(5,Math.floor(v/255*5+t));px[(y0+y)*w+i]=d[o+3]<128?216:q(d[o])*36+q(d[o+1])*6+q(d[o+2])}}
+  const o=[71,73,70,56,57,97,w&255,w>>8,h&255,h>>8,247,0,0];
+  for(let i=0;i<256;i++)o.push(i<216?(i/36|0)%6*51:0,i<216?(i/6|0)%6*51:0,i<216?i%6*51:0);
+  o.push(33,249,4,1,0,0,216,0,44,0,0,0,0,w&255,w>>8,h&255,h>>8,0,8);
+  const d=[];let buf=0,bits=0,size=9,next=258,dict=new Map(),pre=px[0];
+  const put=c=>{buf|=c<<bits;bits+=size;while(bits>=8){d.push(buf&255);buf>>=8;bits-=8}if(next>=(1<<size)&&size<12)size++};
+  put(256);
+  for(let i=1;i<px.length;i++){const k=pre*256+px[i],v=dict.get(k);if(v!==undefined){pre=v;continue}
+    put(pre);if(next<4096)dict.set(k,next++);else{put(256);dict.clear();size=9;next=258}pre=px[i]}
+  put(pre);put(257);if(bits>0)d.push(buf&255);
+  const parts=[new Uint8Array(o)];
+  for(let i=0;i<d.length;i+=255){const s=d.slice(i,i+255);parts.push(new Uint8Array([s.length,...s]))}
+  parts.push(new Uint8Array([0,59]));return new Blob(parts,{type:'image/gif'});
+}
+function bmp(c){
+  const w=c.width,h=c.height,n=w*h*4,u=new Uint8Array(54+n),v=new DataView(u.buffer),x=c.getContext('2d');
+  u[0]=66;u[1]=77;v.setUint32(2,54+n,true);v.setUint32(10,54,true);v.setUint32(14,40,true);v.setInt32(18,w,true);v.setInt32(22,-h,true);v.setUint16(26,1,true);v.setUint16(28,32,true);v.setUint32(34,n,true);
+  for(let y=0;y<h;y+=256){const d=x.getImageData(0,y,w,Math.min(256,h-y)).data,o=54+y*w*4;for(let i=0;i<d.length;i+=4){u[o+i]=d[i+2];u[o+i+1]=d[i+1];u[o+i+2]=d[i];u[o+i+3]=d[i+3]}}
+  return new Blob([u],{type:'image/bmp'});
+}
+async function viaCanvas(file,ext,o){
+  let bm;try{bm=await createImageBitmap(file)}catch{throw Error(`Your browser can’t read this ${label} image. HEIC, RAW and some TIFF files aren’t supported. Convert it to JPG or PNG first.`)}
+  const W=bm.width,H=bm.height,w=[],T=o.on&&o.mode==='t'?o.T:0,lossy=['jpg','webp','avif'].includes(ext);
+  let s=Math.min(1,Math.sqrt(5e7/(W*H)));if(o.on&&o.mode==='a'&&o.res)s=Math.min(s,o.res/Math.max(W,H));if(ext==='ico')s=Math.min(s,256/Math.max(W,H));
+  const enc=(s,q)=>new Promise((ok,no)=>{const c=document.createElement('canvas');c.width=Math.max(1,Math.round(W*s));c.height=Math.max(1,Math.round(H*s));
+    const x=c.getContext('2d');x.imageSmoothingQuality='high';if(ext==='jpg'){x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height)}x.drawImage(bm,0,0,c.width,c.height);
+    if(ext==='ico')return ico(c).then(ok,no);const sp={bmp,tiff,gif}[ext];if(sp)return ok(sp(c));c.toBlob(b=>b&&b.type===MIME[ext]?ok(b):no(Error('Your browser can’t create '+ext.toUpperCase()+' files.')),MIME[ext],q)});
+  const q0=ext==='avif'?.8:.92;let b,q=q0;
+  if(T){
+    for(let i=0;i<8;i++){
+      if(lossy){let lo=.05,hi=.95,best=null;for(let k=0;k<7;k++){const m=(lo+hi)/2,t=await enc(s,m);setProg((i*7+k)/56);if(t.size<=T){best=t;lo=m}else hi=m}
+        if(best){b=best;q=lo;break}b=await enc(s,.05);q=.05;s*=.8}
+      else{b=await enc(s,1);if(b.size<=T)break;s*=Math.max(.3,Math.sqrt(T/b.size)*.95)}
+      if(s*Math.max(W,H)<48)break;
+    }
+    if(b.size>T*1.05)w.push(`Couldn’t reach ${fmt(T)} without making the image unusable. This is the smallest result (${fmt(b.size)}).`);
+    if((lossy&&q<.25)||s<.3)w.push('Heavy compression: the image may look blurry or blocky.');
+  }else b=await enc(s,q0);
+  if(s<1&&!T&&!(o.on&&o.res))w.push('Very large image: it was scaled down to keep your device stable.');
+  return{blob:b,warn:w};
+}
+
+/* ---------- convert + result ---------- */
+const big=()=>cat&&cat!=='image'&&ext!=='mp3'&&file&&file.size>3e8&&'showSaveFilePicker'in window;
+const outName=()=>file.name.replace(/\.[^.]*$/,'')+'.'+ext;
+function why(e){
+  const n=(e&&e.name)||'',m=(e&&e.message)||String(e||'');
+  if(/memory|alloc|RangeError|quota/i.test(n+' '+m))return'Your device ran out of memory or disk space while converting. Close other tabs, lower the resolution, or set a smaller target size, then try again.';
+  if(n==='NotAllowedError'||n==='SecurityError')return'The browser blocked access to the save location. Try again and allow the save dialog, or choose Downloads.';
+  if(n==='Error'&&m)return m;
+  return`Unexpected error while converting (${n||'unknown'}${m?': '+m:''}). Try Chrome or Edge, or a different output format.`;
+}
+$('#go').onclick=async()=>{
+  let fh=null;
+  if(big())try{fh=await showSaveFilePicker({suggestedName:outName(),id:'convertify',startIn:loc==='dl'?'downloads':'documents',types:[{description:ext.toUpperCase()+' file',accept:{[MIME[ext]]:['.'+ext]}}]})}catch(e){if(e.name==='AbortError')return}
+  const g=$('#go');g.disabled=true;$('#done').hidden=true;showWarn('');$('#prog').hidden=false;setProg(0);setStatus('Working…');
+  try{
+    const o=opts(),r=cat==='image'?await viaCanvas(file,ext,o):ext==='mp3'?await viaMP3(file,o):await viaMB(file,ext,cat,o,fh),w=[...r.warn];
+    blob=r.blob;if(o.on&&o.mode==='t'&&o.T&&blob.size>o.T*1.1&&!w.some(x=>/too small|Couldn’t reach/.test(x)))w.push(`The result (${fmt(blob.size)}) ended up above your ${fmt(o.T)} target.`);
+    showWarn(w);showResult(!!fh);
+  }catch(e){console.error(e);const x=$('#warn');x.hidden=false;x.className='note err';x.textContent=why(e)}
+  g.disabled=false;$('#prog').hidden=true;setStatus('');
+};
+function showResult(streamed){
+  const pv=$('#pv');
+  if(cat==='image'){const el=new Image();el.src=URL.createObjectURL(blob);el.onerror=()=>pv.innerHTML=`<p class="hint">Your browser can’t preview .${ext} files, but the converted file is ready.</p>`;pv.replaceChildren(el)}
+  else pv.replaceChildren(mkPlayer(blob,cat));
+  const d=Math.round((1-blob.size/file.size)*100);
+  $('#sizes').textContent=`${fmt(file.size)} → ${fmt(blob.size)}${streamed?' · saved':''}`;$('#delta').textContent=d>0?`${d}% smaller`:d<0?`${-d}% larger`:'Same size';
+  $('#save').hidden=streamed;$('#done').hidden=false;$('#done').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function initLocs(){
+  const lp=$('#locp');
+  if('showSaveFilePicker'in window)lp.innerHTML=`<button data-l="dl">Downloads</button><button data-l="pick">${L2[0]}</button>`;
+  else{lp.innerHTML='';$('#lochint').textContent='Your browser saves converted files to its default Downloads folder.'}
+}
+function markLoc(){
+  document.querySelectorAll('#locp button').forEach(b=>b.classList.toggle('on',b.dataset.l===loc));
+  $('#lochint').textContent=big()?`Large files are written straight to disk, so a save dialog opens when you press Convert. ${loc==='dl'?'It starts in Downloads.':L2[1]}`:loc==='dl'?'Goes straight to your browser’s Downloads folder.':L2[1];
+}
+$('#locp').onclick=e=>{const l=e.target.dataset.l;if(!l)return;loc=l;try{localStorage.setItem('cv-loc',l)}catch{}markLoc()};
+$('#save').onclick=async()=>{
+  const name=outName();
+  if(loc==='pick'&&'showSaveFilePicker'in window){
+    try{const h=await showSaveFilePicker({suggestedName:name,id:'convertify',startIn:'documents',types:[{description:ext.toUpperCase()+' file',accept:{[MIME[ext]]:['.'+ext]}}]});
+      const wr=await h.createWritable();
+      for(let i=0;i<blob.size;i+=8<<20)await wr.write(blob.slice(i,i+(8<<20)));
+      await wr.close();$('#save').textContent='Saved';setTimeout(()=>$('#save').textContent='Save file',1800)}
+    catch(e){if(e.name!=='AbortError')showWarn('Couldn’t save to that location. Try Downloads instead.')}
+    return;
+  }
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4e3);
+};
+$('#theme').onclick=()=>{const t=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=t;try{localStorage.setItem('cv-theme',t)}catch{}};
+/* ---------- player (original preview, result preview, file-launch viewer) ---------- */
+const I={play:'<path fill="currentColor" stroke="none" d="M8 5v14l11-7z"/>',pause:'<path fill="currentColor" stroke="none" d="M7 5h4v14H7zM13 5h4v14h-4z"/>',loop:'<path d="M17 3l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 21l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/>',vol:'<path d="M4 9v6h4l5 4V5L8 9zM16.5 8.5a5 5 0 0 1 0 7"/>',mute:'<path d="M4 9v6h4l5 4V5L8 9zM17 9l4 6M21 9l-4 6"/>',pip:'<rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="12" width="6" height="4" rx="1" fill="currentColor"/>',fs:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'};
+const svg=n=>`<svg viewBox="0 0 24 24">${I[n]}</svg>`,tf=s=>isFinite(s)?`${s/60|0}:${String(Math.floor(s%60)).padStart(2,'0')}`:'0:00';
+function mkPlayer(f,kind,o={}){
+  const el=document.createElement(kind),w=document.createElement('div'),bar=document.createElement('div'),cache={};let url,raf,fell=0;
+  w.className=`pl ${kind}`;bar.className='bar';el.playsInline=true;el.preload='metadata';
+  const set=b=>{url&&URL.revokeObjectURL(url);el.src=url=URL.createObjectURL(b)};
+  bar.innerHTML=`<div class="seek"><span class="tm">0:00</span><input type="range" class="sk" min="0" max="1000" value="0" aria-label="Seek"><span class="tm">0:00</span></div><div class="ctl"><button data-a="p" title="Play / pause" aria-label="Play or pause">${svg('play')}</button>${kind==='audio'?`<button data-a="l" title="Loop" aria-label="Loop">${svg('loop')}</button>`:''}<button data-a="m" title="Mute" aria-label="Mute">${svg('vol')}</button><input type="range" class="vl" min="0" max="1" step=".01" value="1" aria-label="Volume"><span class="gap"></span><select class="sp" title="Playback speed">${[.5,.75,1,1.25,1.5,2].map(s=>`<option value="${s}"${s===1?' selected':''}>${s}×</option>`).join('')}</select>${kind==='video'?`<select class="ql" title="Quality"></select>${document.pictureInPictureEnabled?`<button data-a="i" title="Picture in picture" aria-label="Picture in picture">${svg('pip')}</button>`:''}<button data-a="f" title="Fullscreen" aria-label="Fullscreen">${svg('fs')}</button>`:''}</div>`;
+  w.append(el,bar);const q=s=>bar.querySelector(s),pb=q('[data-a=p]'),sk=q('.sk'),tm=bar.querySelectorAll('.tm'),ql=q('.ql');
+  const upd=()=>{pb.innerHTML=svg(el.paused?'play':'pause');w.classList.toggle('playing',!el.paused)};
+  el.onplay=el.onpause=el.onended=upd;
+  el.ontimeupdate=el.ondurationchange=()=>{if(!sk.drag&&el.duration)sk.value=el.currentTime/el.duration*1000;tm[0].textContent=tf(el.currentTime);tm[1].textContent=tf(el.duration)};
+  sk.oninput=()=>{sk.drag=1;el.currentTime=sk.value/1000*el.duration};sk.onchange=()=>sk.drag=0;
+  el.onvolumechange=()=>{q('[data-a=m]').innerHTML=svg(el.muted||!el.volume?'mute':'vol')};
+  q('.vl').oninput=e=>{el.volume=+e.target.value;el.muted=false};
+  q('.sp').onchange=e=>{const to=+e.target.value,from=el.playbackRate,t0=performance.now(),s=n=>{const k=Math.min(1,(n-t0)/500);el.playbackRate=from+(to-from)*k*k*(3-2*k);if(k<1)raf=requestAnimationFrame(s)};cancelAnimationFrame(raf);raf=requestAnimationFrame(s)};
+  bar.onclick=e=>{const b=e.target.closest('[data-a]'),a=b&&b.dataset.a;if(!a)return;
+    if(a==='p')el.paused?el.play():el.pause();
+    if(a==='l'){el.loop=!el.loop;b.classList.toggle('on',el.loop)}
+    if(a==='m')el.muted=!el.muted;
+    if(a==='i')document.pictureInPictureElement?document.exitPictureInPicture():el.requestPictureInPicture().catch(()=>{});
+    if(a==='f')document.fullscreenElement?document.exitFullscreen():w.requestFullscreen().catch(()=>{})};
+  const busy=async(msg,fn)=>{w.dataset.busy=msg;w.classList.add('busy');try{await fn()}catch(e){w.dataset.err=why(e);w.classList.add('bad')}w.classList.remove('busy');setStatus('')};
+  /* browsers can often decode the codec but not the container (e.g. .ts, .mkv): let Mediabunny re-wrap it */
+  el.onerror=()=>{if(fell++){w.dataset.err='This browser can’t play this file.';return w.classList.add('bad')}
+    busy('Preparing preview…',async()=>set((await viaMB(f,kind==='video'?'mp4':'wav',kind,{on:false},null)).blob))};
+  if(kind==='video'){
+    el.onclick=()=>pb.click();
+    el.onloadedmetadata=()=>{if(ql.options.length)return;const h=el.videoHeight;ql.innerHTML=`<option value="0">Original${h?' '+h+'p':''}</option>`+[1080,720,480,360,240].filter(x=>x<h).map(x=>`<option value="${x}">${x}p</option>`).join('')};
+    ql.onchange=()=>{const h=+ql.value,t0=el.currentTime,pl=!el.paused;
+      busy(h?`Preparing ${h}p…`:'Switching…',async()=>{if(!(h in cache))cache[h]=h?(await viaMB(f,'mp4','video',{on:true,mode:'a',res:h},null)).blob:f;
+        el.addEventListener('loadeddata',()=>{el.currentTime=t0;if(pl)el.play()},{once:true});set(cache[h])})};
+  }
+  set(f);if(o.auto)el.play().catch(()=>{el.muted=true;el.play().catch(()=>{})});
+  return w;
+}
+function showOrig(){
+  const o=$('#origp');o.replaceChildren();
+  if(cat==='image'){const i=new Image();i.className='oi';i.alt=file.name;i.src=URL.createObjectURL(file);i.onerror=()=>o.textContent='Your browser can’t display this image format, but it can still be converted.';o.append(i)}
+  else o.append(mkPlayer(file,cat));
+  $('#orig').hidden=false;
+}
+/* ---------- opened from the OS (File Handling API): preview only ---------- */
+async function openViewer(f){
+  const[c]=await sniff(f),v=$('#vwr');document.body.classList.add('viewer');document.title=f.name;v.hidden=false;v.replaceChildren();
+  if(c==='image'){const i=new Image();i.alt=f.name;i.src=URL.createObjectURL(f);i.onerror=()=>v.textContent='This browser can’t display that image format.';v.append(i)}
+  else if(c){const p=mkPlayer(f,c,{auto:1});if(c==='audio'){const h=document.createElement('div');h.className='vt';h.textContent=f.name;p.prepend(h)}v.append(p)}
+  else v.textContent='Unsupported file.';
+}
+if('launchQueue'in window)launchQueue.setConsumer(async l=>{if(l.files&&l.files.length)openViewer(await l.files[0].getFile())});
+if('serviceWorker'in navigator&&/^https?:/.test(location.protocol))addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+</script>
+</body>
+</html>
