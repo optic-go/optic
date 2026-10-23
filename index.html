@@ -124,7 +124,7 @@ select:focus,input:focus-visible,button:focus-visible{outline:2px solid var(--in
 .ti{font-size:20px;font-weight:600;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ar{color:var(--mute);font-size:14px}
 .wv{display:flex;align-items:center;gap:14px;width:min(560px,100%);margin:18px 0 8px}
-.wv canvas{flex:1;min-width:0;height:56px;cursor:pointer}
+.wv canvas{flex:1;min-width:0;height:56px;cursor:pointer;background:#18181a;border-radius:10px}
 .tt{font-size:13px;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
 .cc{justify-content:center;gap:10px}
 .ctl button.pbig{width:56px;height:56px;border-radius:50%;background:var(--ink);color:var(--on)}
@@ -547,7 +547,8 @@ function mkAudio(fs,o={}){
   const bt=(a,tl,ic,c='')=>`<button data-a="${a}" class="${c}" title="${tl}" aria-label="${tl}">${svg(ic)}</button>`;
   w.innerHTML=(multi?'<ul class="pls"></ul>':'')+`<div class="aum"><img class="cov" alt="" hidden><div class="ti"></div><div class="ar"></div><div class="wv"><canvas></canvas><span class="tt">0:00 / 0:00</span></div><div class="ctl cc">${multi?bt('s','Shuffle','shuf'):''}${multi?bt('pv','Previous','prev'):''}${bt('p','Play / pause','play','pbig')}${multi?bt('nx','Next','next'):''}<button data-a="l" class="lp" data-m="0" title="Loop" aria-label="Loop">${svg('loop')}</button></div><div class="ctl cc"><select class="sp" title="Playback speed">${[.5,.75,1,1.25,1.5,2].map(s=>`<option value="${s}"${s===1?' selected':''}>${s}×</option>`).join('')}</select><button data-a="m" title="Mute" aria-label="Mute">${svg('vol')}</button><input type="range" class="vl" min="0" max="1" step=".01" value="1" aria-label="Volume"></div></div>`;
   const q=s=>w.querySelector(s),cv=q('canvas'),g=cv.getContext('2d'),pls=q('.pls');
-  let cur=0,mode=0,shuf=0,url,raf,fell=0,AC,an,fd,ph=0;const amp=Array(12).fill(.2);
+  if(pls)fs.forEach(()=>pls.append(document.createElement('li')));
+  let cur=0,mode=0,shuf=0,url,raf,fell=0,AC,an,fd,ph=0;const amp=Array(24).fill(.2);
   const upd=()=>{q('[data-a=p]').innerHTML=svg(el.paused?'play':'pause')};
   const show=()=>{const m=meta[cur];q('.ti').textContent=m.t;q('.ar').textContent=m.a;q('.ar').hidden=!m.a;const c=q('.cov');c.hidden=!m.img;if(m.img)c.src=m.img;
     if(pls)[...pls.children].forEach((li,i)=>{li.className=i===cur?'on':'';li.innerHTML=`<span>${i+1}. </span><small></small>`;li.firstChild.textContent=meta[i].t;li.lastChild.textContent=meta[i].a;li.lastChild.hidden=!meta[i].a})};
@@ -561,15 +562,17 @@ function mkAudio(fs,o={}){
     try{q('.ar').hidden=false;q('.ar').textContent='Preparing…';el.src=url=URL.createObjectURL(await prev(fs[cur],'wav','audio',{on:false}));show()}catch(e){q('.ar').hidden=false;q('.ar').textContent=why(e)}};
   const resize=()=>{cv.width=cv.clientWidth*dpr;cv.height=cv.clientHeight*dpr;draw()};
   function draw(){
-    const W=cv.width,H=cv.height,cs=getComputedStyle(document.documentElement),K=amp.length;
-    if(an&&!el.paused){an.getByteFrequencyData(fd);const n=fd.length*.7|0;for(let k=0;k<K;k++){const lo=Math.floor(n**(k/K)),hi=Math.max(lo+1,Math.floor(n**((k+1)/K)));let s=0;for(let b=lo;b<hi;b++)s+=fd[b];amp[k]=amp[k]*.6+(s/(hi-lo)/255)*.4}ph+=.07}
-    else for(let k=0;k<K;k++)amp[k]+=(.2-amp[k])*.05;
-    const p=el.duration?el.currentTime/el.duration:0,x0=p*W,mid=H/2;g.clearRect(0,0,W,H);g.lineWidth=2*dpr;g.lineCap='round';
-    g.globalAlpha=.45;g.strokeStyle=cs.getPropertyValue('--mute');g.beginPath();g.moveTo(x0,mid);g.lineTo(W,mid);g.stroke();g.globalAlpha=1;
-    g.strokeStyle=cs.getPropertyValue('--ink');g.beginPath();
-    for(let x=0;x<=x0;x+=2){let s=0,ws=0;for(let k=0;k<K;k++){const wk=1/(1+k*.3);s+=wk*amp[k]*Math.sin(x/dpr*.02*(k+1)+ph*(1+k*.12)+k*1.7);ws+=wk}
-      const y=mid+mid*.85*Math.max(-1,Math.min(1,s/ws*2.2))*Math.min(1,(x0-x)/(24*dpr)+.05);x?g.lineTo(x,y):g.moveTo(x,y)}
-    g.stroke();g.fillStyle=cs.getPropertyValue('--ink');g.beginPath();g.arc(x0,mid,5*dpr,0,7);g.fill();
+    const W=cv.width,H=cv.height,K=amp.length;
+    if(an&&!el.paused){an.getByteFrequencyData(fd);const n=fd.length*.7|0;for(let k=0;k<K;k++){const lo=Math.floor(n**(k/K)),hi=Math.max(lo+1,Math.floor(n**((k+1)/K)));let s=0;for(let b=lo;b<hi;b++)s+=fd[b];amp[k]=amp[k]*.55+Math.min(1,(s/(hi-lo)/255)*(1+k/K*.7))*.45}}
+    else for(let k=0;k<K;k++)amp[k]+=(.2+.08*Math.sin(k*.9)-amp[k])*.06;
+    const P=amp.map((a,k)=>[k/(K-1)*W,H-(.1+.8*a)*H]),x0=(el.duration?el.currentTime/el.duration:0)*W,path=new Path2D();
+    path.moveTo(0,H);path.lineTo(...P[0]);
+    /* Catmull-Rom spline: passes exactly through every point, smooth between them */
+    for(let i=0;i<K-1;i++){const a=P[Math.max(0,i-1)],b=P[i],c=P[i+1],d=P[Math.min(K-1,i+2)];path.bezierCurveTo(b[0]+(c[0]-a[0])/6,b[1]+(c[1]-a[1])/6,c[0]-(d[0]-b[0])/6,c[1]-(d[1]-b[1])/6,c[0],c[1])}
+    path.lineTo(W,H);path.closePath();
+    g.clearRect(0,0,W,H);g.fillStyle='#6b6b70';g.fill(path);
+    g.save();g.beginPath();g.rect(0,0,x0,H);g.clip();g.fillStyle='#fff';g.fill(path);g.restore();
+    const xk=Math.min(W-6*dpr,Math.max(6*dpr,x0));g.fillStyle='#fff';g.fillRect(xk-dpr,0,2*dpr,H);g.beginPath();g.arc(xk,H/2,6*dpr,0,7);g.fill();
     q('.tt').textContent=`${tf(el.currentTime)} / ${tf(el.duration)}`;
   }
   const loop=()=>{draw();if(!el.paused)raf=requestAnimationFrame(loop)};
