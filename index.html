@@ -179,7 +179,7 @@ footer{margin-top:36px;text-align:center;font-size:12px;color:var(--mute)}
   <button id="save" class="primary">Save file</button>
 </section>
 <section id="orig" hidden><div class="lbl">Original</div><div id="origp"></div></section>
-<footer>Large files are read and processed in small pieces to keep your device responsive.</footer>
+<footer>Large files are read and processed in small pieces to keep your device responsive.<span id="off"></span></footer>
 </main>
 
 <div id="vwr" hidden></div>
@@ -569,17 +569,23 @@ function mkImage(f,o={}){
 /* Cover art that is a square icon padded with flat colour bars to fill 16:9: find the bars and crop to the icon */
 async function trimCover(u){
   try{
-    const im=new Image();im.src=u;await im.decode();const W=im.naturalWidth,H=im.naturalHeight;if(W<32||H<32)return u;
-    const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(im,0,0);const d=x.getImageData(0,0,W,H).data;
-    const at=(i,j)=>{const k=(j*W+i)*4;return[d[k],d[k+1],d[k+2]]},same=(i,j,r)=>{const k=(j*W+i)*4;return Math.abs(d[k]-r[0])+Math.abs(d[k+1]-r[1])+Math.abs(d[k+2]-r[2])<40};
-    const col=(i,r)=>{let n=0;for(let j=0;j<H;j++)if(!same(i,j,r))n++;return n<H*.02},row=(j,r)=>{let n=0;for(let i=0;i<W;i++)if(!same(i,j,r))n++;return n<W*.02};
-    const rl=at(0,H>>1),rr=at(W-1,H>>1),rt=at(W>>1,0),rb=at(W>>1,H-1);let l=0,r=W-1,t=0,b=H-1;
-    while(l<W/3&&col(l,rl))l++;while(r>W*2/3&&col(r,rr))r--;while(t<H/3&&row(t,rt))t++;while(b>H*2/3&&row(b,rb))b--;
-    if(l)l+=2;if(r<W-1)r-=2;if(t)t+=2;if(b<H-1)b-=2;
-    const w=r-l+1,h=b-t+1;if((w>W*.95&&h>H*.95)||w<24||h<24)return u;
-    const o=document.createElement('canvas');o.width=w;o.height=h;o.getContext('2d').drawImage(c,l,t,w,h,0,0,w,h);
+    const im=new Image();im.src=u;await im.decode();const W0=im.naturalWidth,H0=im.naturalHeight;if(W0<32||H0<32)return u;
+    const s=Math.min(1,480/Math.max(W0,H0)),W=Math.round(W0*s),H=Math.round(H0*s),c=document.createElement('canvas');c.width=W;c.height=H;
+    const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(im,0,0,W,H);const d=x.getImageData(0,0,W,H).data,G=new Float32Array(W*H);
+    for(let i=0;i<W*H;i++)G[i]=d[i*4]*.3+d[i*4+1]*.59+d[i*4+2]*.11;
+    /* "detail" per column and row = average local contrast. Padding (flat, gradient or blurred) has almost none; the real icon has plenty. */
+    const ec=new Float32Array(W),er=new Float32Array(H);
+    for(let j=0;j<H-1;j++)for(let i=0;i<W-1;i++){const k=j*W+i,v=Math.abs(G[k+1]-G[k])+Math.abs(G[k+W]-G[k]);ec[i]+=v/H;er[j]+=v/W}
+    const med=a=>[...a].sort((p,q)=>p-q)[a.length>>1],tc=Math.max(1.5,Math.min(8,med(ec)*.3)),tr=Math.max(1.5,Math.min(8,med(er)*.3));
+    let l=0,r=W-1,t=0,b=H-1;
+    while(l<W/2&&ec[l]<tc)l++;while(r>W/2&&ec[r-1]<tc)r--;while(t<H/2&&er[t]<tr)t++;while(b>H/2&&er[b-1]<tr)b--;
+    if(l)l++;if(r<W-1)r--;if(t)t++;if(b<H-1)b--;
+    const w=(r-l+1)/s,h=(b-t+1)/s,side=Math.min(w,h);
+    if((w>W0*.96&&h>H0*.96)||side<Math.min(W0,H0)*.3||side<32)return u;
+    const sx=l/s+(w-side)/2,sy=t/s+(h-side)/2,n=Math.min(1024,Math.round(side)),o=document.createElement('canvas');o.width=o.height=n;
+    o.getContext('2d').drawImage(im,sx,sy,side,side,0,0,n,n);
     return URL.createObjectURL(await new Promise(ok=>o.toBlob(ok,'image/png')));
-  }catch{return u}
+  }catch(e){console.warn('Cover trim skipped:',e);return u}
 }
 function mkAudio(fs,o={}){
   const w=document.createElement('div'),el=document.createElement('audio'),multi=fs.length>1,dpr=devicePixelRatio||1,meta=fs.map(f=>({t:f.name.replace(/\.[^.]*$/,''),a:'',img:''}));
@@ -648,7 +654,11 @@ async function openViewer(fs,o={}){
   if(o.closable){const x=document.createElement('button');x.className='vx';x.textContent='×';x.title='Close';x.onclick=()=>{document.body.classList.remove('viewer');document.title='OPTIC';v.hidden=true;v.replaceChildren()};v.append(x)}
 }
 if('launchQueue'in window)launchQueue.setConsumer(async l=>{if(l.files&&l.files.length)openViewer(await Promise.all(l.files.map(h=>h.getFile())),{handles:l.files})});
-if('serviceWorker'in navigator&&/^https?:/.test(location.protocol))addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+if('serviceWorker'in navigator&&/^https?:/.test(location.protocol)){
+  navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).catch(e=>{$('#off').textContent=' · Offline mode unavailable ('+(e.message||e.name)+')'});
+  navigator.serviceWorker.ready.then(async()=>{try{const k=(await caches.keys()).find(n=>n.startsWith('optic-')),c=k&&await caches.open(k),ok=c&&await c.match(new URL('./',location).href,{ignoreSearch:true,ignoreVary:true}),eng=c&&await c.match('https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.cjs');
+    $('#off').textContent=ok?(eng?' · Works offline':' · App works offline, but the media engine isn’t saved yet: reload once while online'):' · Offline copy not saved yet: reload once while online'}catch{}});
+}
 </script>
 </body>
 </html>
