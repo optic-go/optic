@@ -1,10 +1,14 @@
-const V='optic-v2',CORE=['./','index.html','manifest.json','icon-192.png','icon-512.png'],
-LIBS=['https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.cjs','https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.mjs','https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js'];
-// Each file is cached on its own, so one missing file can never stop the app from installing.
+const V='optic-v3',S=self.registration.scope,U=p=>new URL(p,S).href,
+CORE=['./','index.html','manifest.json','icon-192.png','icon-512.png'].map(U),
+LIBS=['https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.cjs','https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.mjs','https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js'],
+M={ignoreSearch:true,ignoreVary:true};
+// Browsers refuse to show a redirected response for a page load, so store a clean copy.
+const clean=async r=>new Response(await r.blob(),{status:200,headers:{'Content-Type':r.headers.get('Content-Type')||'application/octet-stream'}});
+// Every file is cached on its own: one missing file can never block the install.
 self.addEventListener('install',e=>e.waitUntil((async()=>{
   const c=await caches.open(V);
   await Promise.all([
-    ...CORE.map(u=>fetch(new Request(u,{cache:'reload'})).then(r=>r.ok&&c.put(u,r)).catch(()=>{})),
+    ...CORE.map(u=>fetch(new Request(u,{cache:'reload'})).then(async r=>r.ok&&c.put(u,await clean(r))).catch(()=>{})),
     ...LIBS.map(u=>fetch(u,{mode:'cors'}).then(r=>r.ok&&c.put(u,r)).catch(()=>{}))]);
   self.skipWaiting();
 })()));
@@ -16,10 +20,10 @@ self.addEventListener('fetch',e=>{
   const r=e.request;if(r.method!=='GET')return;
   e.respondWith((async()=>{
     const c=await caches.open(V),same=new URL(r.url).origin===location.origin;
-    let hit=await c.match(r,{ignoreSearch:true});
-    if(!hit&&r.mode==='navigate')hit=await c.match('./')||await c.match('index.html');
+    let hit=await c.match(r,M);
+    if(!hit&&r.mode==='navigate')hit=await c.match(U('./'),M)||await c.match(U('index.html'),M);
     if(hit&&!same)return hit;
-    const net=fetch(r).then(res=>{if(res.ok&&(same||LIBS.includes(r.url)))c.put(r,res.clone());return res}).catch(()=>null);
-    return hit||(await net)||Response.error();
+    const net=fetch(r).then(async res=>{if(res.ok&&(same||LIBS.includes(r.url)))c.put(r,res.redirected?await clean(res):res.clone());return res}).catch(()=>null);
+    return hit||(await net)||(r.mode==='navigate'?new Response('Offline',{status:503}):Response.error());
   })());
 });
