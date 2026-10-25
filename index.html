@@ -89,9 +89,13 @@ select:focus,input:focus-visible,button:focus-visible{outline:2px solid var(--in
 .pl.bad::after{content:attr(data-busy);position:absolute;inset:0;display:grid;place-items:center;padding:16px;text-align:center;background:#000b;color:#fff;font-size:14px}
 .pl.bad::after{content:attr(data-err)}
 .pl:fullscreen{border-radius:0;display:grid;place-items:center;background:#000}
-.pl:fullscreen video{max-height:100vh;height:100vh}
+.pl:fullscreen{width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important}
+.pl:fullscreen video{width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;object-fit:contain}
 .ov{display:none;position:absolute;inset:0;place-content:center;justify-items:center;gap:12px;padding:16px;text-align:center;background:#000c;color:#fff;font-size:14px}
-.pl.busy .ov{display:grid}
+.pl.busy .ov,.au.busy .ov{display:grid}
+.au{position:relative}
+.ov button.rs{border:0;background:#fff;color:#000;border-radius:9px;padding:8px 16px;font-size:14px;font-weight:560}
+.ov small{opacity:.85;max-width:300px;line-height:1.4}
 .ov i{display:block;width:min(280px,70%);height:4px;border-radius:4px;background:#fff3;overflow:hidden}
 .ov b{display:block;height:100%;width:0;background:#fff;transition:width .2s}
 .ie{display:flex;flex-direction:column;height:74vh;background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
@@ -290,7 +294,7 @@ function abr(o,dur,mn,w,def){
 /* Audio + video: WebCodecs via Mediabunny. The input is read in slices and, for big files, the output is streamed straight to disk. */
 async function viaMB(file,ext,cat,o,fh){
   const M=await loadMB(),w=[],T=o.on&&o.mode==='t'?o.T:0,res=o.on&&o.mode==='a'?o.res:0,cfg={};
-  setStatus('Reading file…');
+  if(!o.job)setStatus('Reading file…');
   const input=new M.Input({source:new M.BlobSource(file),formats:M.ALL_FORMATS});let dur=0,vt=null;
   try{dur=await input.computeDuration();if(cat==='video')vt=await input.getPrimaryVideoTrack()}
   catch{throw Error(`This file’s contents couldn’t be read as ${cat}. It may be damaged, incomplete, or in a format this browser engine doesn’t know.`)}
@@ -314,7 +318,7 @@ async function viaMB(file,ext,cat,o,fh){
     const lost=conv.discardedTracks.map(d=>`${d.track.type} track (${String(d.reason).replace(/_/g,' ')})`).join(', ');
     if(!conv.isValid)throw Error(`Your browser can’t convert this file: ${lost||'no usable tracks'}. The codec inside may not be supported by this browser. Try Chrome or Edge, or a different output format.`);
     if(lost)w.push('Left out because they couldn’t be converted: '+lost+'.');
-    setStatus('Converting…');conv.onProgress=setProg;await conv.execute();
+    if(o.job)o.job.conv=conv;if(!o.job)setStatus('Converting…');conv.onProgress=o.job?(p=>o.job.ui&&o.job.ui.prog(p)):setProg;await conv.execute();
     if(wr)await wr.close().catch(()=>{});
     return{blob:fh?await fh.getFile():new Blob([output.target.buffer],{type:MIME[ext]}),warn:w};
   }catch(e){if(wr)await wr.abort().catch(()=>{});throw e}
@@ -400,13 +404,13 @@ function why(e){
 $('#go').onclick=async()=>{
   let fh=null;
   if(big())try{fh=await showSaveFilePicker({suggestedName:outName(),id:'convertify',startIn:loc==='dl'?'downloads':'documents',types:[{description:ext.toUpperCase()+' file',accept:{[MIME[ext]]:['.'+ext]}}]})}catch(e){if(e.name==='AbortError')return}
-  const g=$('#go');g.disabled=true;$('#done').hidden=true;showWarn('');$('#prog').hidden=false;setProg(0);setStatus('Working…');
+  const g=$('#go');converting=true;pauseJobs();g.disabled=true;$('#done').hidden=true;showWarn('');$('#prog').hidden=false;setProg(0);setStatus('Working…');
   try{
     const o=opts(),r=cat==='image'?await viaCanvas(file,ext,o):ext==='mp3'?await viaMP3(file,o):await viaMB(file,ext,cat,o,fh),w=[...r.warn];
     blob=r.blob;if(o.on&&o.mode==='t'&&o.T&&blob.size>o.T*1.1&&!w.some(x=>/too small|Couldn’t reach/.test(x)))w.push(`The result (${fmt(blob.size)}) ended up above your ${fmt(o.T)} target.`);
     showWarn(w);showResult(!!fh);
   }catch(e){console.error(e);const x=$('#warn');x.hidden=false;x.className='note err';x.textContent=why(e)}
-  g.disabled=false;$('#prog').hidden=true;setStatus('');
+  converting=false;releaseJobs();g.disabled=false;$('#prog').hidden=true;setStatus('');
 };
 function showResult(streamed){
   const pv=$('#pv');
@@ -448,7 +452,29 @@ async function sweep(all){
   const old=[...tmps];tmps.length=0;
   try{const d=await navigator.storage.getDirectory();for await(const k of d.keys())if(k.startsWith('optic-')&&(all||old.includes(k)))await d.removeEntry(k).catch(()=>{})}catch{}
 }
-async function prev(f,ext,kind,o){
+let converting=false;const jobs=new Set();
+function pauseJobs(){jobs.forEach(j=>{j.force=false;if(j.running&&j.conv){j.paused=true;Promise.resolve(j.conv.cancel()).catch(()=>{})}})}
+function releaseJobs(){jobs.forEach(j=>j.go&&j.go())}
+const OV='<span></span><i><b></b></i><button class="rs" hidden>Resume Preview</button><small hidden>Warning: resuming the preview will slow down your conversion.</small>';
+function mkBusy(w,ov,onErr){
+  const sp=ov.children[0],bx=ov.children[1],bar=bx.firstChild,rs=ov.children[2],wn=ov.children[3];
+  return async(msg,run)=>{
+    sp.textContent=msg;bar.style.width='0';w.classList.add('busy');
+    const ui={prog:p=>{sp.textContent=`${msg} ${Math.round(p*100)}%`;bar.style.width=p*100+'%'},hold:h=>{rs.hidden=wn.hidden=!h;bx.hidden=h;sp.textContent=h?'Preview paused while converting':msg}};
+    rs.onclick=()=>ui.resume&&ui.resume();
+    try{await run(ui)}catch(e){onErr(e)}
+    w.classList.remove('busy');
+  };
+}
+async function prev(f,ext,kind,o,ui){
+  const job={ui,force:false,running:false,paused:false,conv:null};jobs.add(job);if(ui)ui.resume=()=>{job.force=true;job.go&&job.go()};
+  try{for(;;){
+    if(converting&&!job.force){ui&&ui.hold(true);await new Promise(r=>job.go=r);ui&&ui.hold(false)}
+    job.running=true;job.paused=false;
+    try{return await prev1(f,ext,kind,{...o,job})}catch(e){if(job.paused)continue;throw e}finally{job.running=false}
+  }}finally{jobs.delete(job)}
+}
+async function prev1(f,ext,kind,o){
   let fh=null;
   if(f.size>4e8&&navigator.storage&&navigator.storage.getDirectory)try{await ready;const d=await navigator.storage.getDirectory(),n=`optic-${Date.now()}.${ext}`;tmps.push(n);fh=await d.getFileHandle(n,{create:true});await(await fh.createWritable()).abort()}catch{fh=null}
   return(await viaMB(f,ext,kind,o,fh)).blob;
@@ -459,7 +485,7 @@ function mkPlayer(f,kind,o={}){
   w.className=`pl ${kind}`;bar.className='bar';el.playsInline=true;el.preload='metadata';
   const set=b=>{url&&URL.revokeObjectURL(url);el.src=url=URL.createObjectURL(b)};
   bar.innerHTML=`<div class="seek"><span class="tm">0:00</span><input type="range" class="sk" min="0" max="1000" value="0" aria-label="Seek"><span class="tm">0:00</span></div><div class="ctl"><button data-a="p" title="Play / pause" aria-label="Play or pause">${svg('play')}</button>${kind==='audio'?`<button data-a="l" title="Loop" aria-label="Loop">${svg('loop')}</button>`:''}<button data-a="m" title="Mute" aria-label="Mute">${svg('vol')}</button><input type="range" class="vl" min="0" max="1" step=".01" value="1" aria-label="Volume"><span class="gap"></span><select class="sp" title="Playback speed">${[.5,.75,1,1.25,1.5,2].map(s=>`<option value="${s}"${s===1?' selected':''}>${s}×</option>`).join('')}</select>${kind==='video'?`<select class="ql" title="Quality"></select>${document.pictureInPictureEnabled?`<button data-a="i" title="Picture in picture" aria-label="Picture in picture">${svg('pip')}</button>`:''}<button data-a="f" title="Fullscreen" aria-label="Fullscreen">${svg('fs')}</button>`:''}</div>`;
-  const ov=document.createElement('div');ov.className='ov';ov.innerHTML='<span></span><i><b></b></i>';w.append(el,bar,ov);const q=s=>bar.querySelector(s),pb=q('[data-a=p]'),sk=q('.sk'),tm=bar.querySelectorAll('.tm'),ql=q('.ql');
+  const ov=document.createElement('div');ov.className='ov';ov.innerHTML=OV;w.append(el,bar,ov);const q=s=>bar.querySelector(s),pb=q('[data-a=p]'),sk=q('.sk'),tm=bar.querySelectorAll('.tm'),ql=q('.ql');
   const upd=()=>{pb.innerHTML=svg(el.paused?'play':'pause');w.classList.toggle('playing',!el.paused)};
   el.onplay=el.onpause=el.onended=upd;
   el.ontimeupdate=el.ondurationchange=()=>{if(!sk.drag&&el.duration)sk.value=el.currentTime/el.duration*1000;tm[0].textContent=tf(el.currentTime);tm[1].textContent=tf(el.duration)};
@@ -473,16 +499,15 @@ function mkPlayer(f,kind,o={}){
     if(a==='m')el.muted=!el.muted;
     if(a==='i')document.pictureInPictureElement?document.exitPictureInPicture():el.requestPictureInPicture().catch(()=>{});
     if(a==='f')document.fullscreenElement?document.exitFullscreen():w.requestFullscreen().catch(()=>{})};
-  const busy=async(msg,fn)=>{const sp=ov.firstChild,bb=ov.lastChild.firstChild;sp.textContent=msg;bb.style.width='0';w.classList.add('busy');onProg=p=>{sp.textContent=`${msg} ${Math.round(p*100)}%`;bb.style.width=p*100+'%'};
-    try{await fn()}catch(e){w.dataset.err=why(e);w.classList.add('bad')}onProg=null;w.classList.remove('busy');setStatus('')};
+  const busy=mkBusy(w,ov,e=>{w.dataset.err=why(e);w.classList.add('bad')});
   /* browsers can often decode the codec but not the container (e.g. .ts, .mkv): let Mediabunny re-wrap it */
   el.onerror=()=>{if(fell++){w.dataset.err='This browser can’t play this file.';return w.classList.add('bad')}
-    busy(f.size>4e8?'Preparing large-file preview in chunks…':'Preparing preview…',async()=>set(await prev(f,kind==='video'?'mp4':'wav',kind,{on:false})))};
+    busy(f.size>4e8?'Preparing large-file preview in chunks…':'Preparing preview…',async ui=>set(await prev(f,kind==='video'?'mp4':'wav',kind,{on:false},ui)))};
   if(kind==='video'){
     el.onclick=()=>pb.click();
     el.onloadedmetadata=()=>{if(ql.options.length)return;const h=el.videoHeight;ql.innerHTML=`<option value="0">Original${h?' '+h+'p':''}</option>`+[1080,720,480,360,240].filter(x=>x<h).map(x=>`<option value="${x}">${x}p</option>`).join('')};
     ql.onchange=()=>{const h=+ql.value,t0=el.currentTime,pl=!el.paused;
-      busy(h?`Preparing ${h}p…`:'Switching…',async()=>{if(!(h in cache))cache[h]=h?await prev(f,'mp4','video',{on:true,mode:'a',res:h}):f;
+      busy(h?`Preparing ${h}p…`:'Switching…',async ui=>{if(!(h in cache))cache[h]=h?await prev(f,'mp4','video',{on:true,mode:'a',res:h},ui):f;
         el.addEventListener('loadeddata',()=>{el.currentTime=t0;if(pl)el.play()},{once:true});set(cache[h])})};
   }
   set(f);if(o.auto)el.play().catch(()=>{el.muted=true;el.play().catch(()=>{})});
@@ -541,6 +566,21 @@ function mkImage(f,o={}){
   return w;
 }
 /* ---------- audio player + playlist ---------- */
+/* Cover art that is a square icon padded with flat colour bars to fill 16:9: find the bars and crop to the icon */
+async function trimCover(u){
+  try{
+    const im=new Image();im.src=u;await im.decode();const W=im.naturalWidth,H=im.naturalHeight;if(W<32||H<32)return u;
+    const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(im,0,0);const d=x.getImageData(0,0,W,H).data;
+    const at=(i,j)=>{const k=(j*W+i)*4;return[d[k],d[k+1],d[k+2]]},same=(i,j,r)=>{const k=(j*W+i)*4;return Math.abs(d[k]-r[0])+Math.abs(d[k+1]-r[1])+Math.abs(d[k+2]-r[2])<40};
+    const col=(i,r)=>{let n=0;for(let j=0;j<H;j++)if(!same(i,j,r))n++;return n<H*.02},row=(j,r)=>{let n=0;for(let i=0;i<W;i++)if(!same(i,j,r))n++;return n<W*.02};
+    const rl=at(0,H>>1),rr=at(W-1,H>>1),rt=at(W>>1,0),rb=at(W>>1,H-1);let l=0,r=W-1,t=0,b=H-1;
+    while(l<W/3&&col(l,rl))l++;while(r>W*2/3&&col(r,rr))r--;while(t<H/3&&row(t,rt))t++;while(b>H*2/3&&row(b,rb))b--;
+    if(l)l+=2;if(r<W-1)r-=2;if(t)t+=2;if(b<H-1)b-=2;
+    const w=r-l+1,h=b-t+1;if((w>W*.95&&h>H*.95)||w<24||h<24)return u;
+    const o=document.createElement('canvas');o.width=w;o.height=h;o.getContext('2d').drawImage(c,l,t,w,h,0,0,w,h);
+    return URL.createObjectURL(await new Promise(ok=>o.toBlob(ok,'image/png')));
+  }catch{return u}
+}
 function mkAudio(fs,o={}){
   const w=document.createElement('div'),el=document.createElement('audio'),multi=fs.length>1,dpr=devicePixelRatio||1,meta=fs.map(f=>({t:f.name.replace(/\.[^.]*$/,''),a:'',img:''}));
   w.className='au'+(o.viewer?' vw':'')+(multi?' multi':'');el.preload='metadata';
@@ -548,18 +588,20 @@ function mkAudio(fs,o={}){
   w.innerHTML=(multi?'<ul class="pls"></ul>':'')+`<div class="aum"><img class="cov" alt="" hidden><div class="ti"></div><div class="ar"></div><div class="wv"><canvas></canvas><span class="tt">0:00 / 0:00</span></div><div class="ctl cc">${multi?bt('s','Shuffle','shuf'):''}${multi?bt('pv','Previous','prev'):''}${bt('p','Play / pause','play','pbig')}${multi?bt('nx','Next','next'):''}<button data-a="l" class="lp" data-m="0" title="Loop" aria-label="Loop">${svg('loop')}</button></div><div class="ctl cc"><select class="sp" title="Playback speed">${[.5,.75,1,1.25,1.5,2].map(s=>`<option value="${s}"${s===1?' selected':''}>${s}×</option>`).join('')}</select><button data-a="m" title="Mute" aria-label="Mute">${svg('vol')}</button><input type="range" class="vl" min="0" max="1" step=".01" value="1" aria-label="Volume"></div></div>`;
   const q=s=>w.querySelector(s),cv=q('canvas'),g=cv.getContext('2d'),pls=q('.pls');
   if(pls)fs.forEach(()=>pls.append(document.createElement('li')));
+  const ov=document.createElement('div');ov.className='ov';ov.innerHTML=OV;w.append(ov);
+  const busy=mkBusy(w,ov,e=>{q('.ar').hidden=false;q('.ar').textContent=why(e)});
   let cur=0,mode=0,shuf=0,url,raf,fell=0,AC,an,fd,ph=0;const amp=Array(24).fill(.2);
   const upd=()=>{q('[data-a=p]').innerHTML=svg(el.paused?'play':'pause')};
   const show=()=>{const m=meta[cur];q('.ti').textContent=m.t;q('.ar').textContent=m.a;q('.ar').hidden=!m.a;const c=q('.cov');c.hidden=!m.img;if(m.img)c.src=m.img;
     if(pls)[...pls.children].forEach((li,i)=>{li.className=i===cur?'on':'';li.innerHTML=`<span>${i+1}. </span><small></small>`;li.firstChild.textContent=meta[i].t;li.lastChild.textContent=meta[i].a;li.lastChild.hidden=!meta[i].a})};
   const readMeta=async i=>{try{const M=await loadMB(),m=await new M.Input({source:new M.BlobSource(fs[i]),formats:M.ALL_FORMATS}).getMetadataTags(),im=m.images&&m.images[0];
-    if(m.title)meta[i].t=m.title;if(m.artist)meta[i].a=m.artist;if(im)meta[i].img=URL.createObjectURL(new Blob([im.data],{type:im.mimeType}))}catch{}show()};
+    if(m.title)meta[i].t=m.title;if(m.artist)meta[i].a=m.artist;if(im)meta[i].img=await trimCover(URL.createObjectURL(new Blob([im.data],{type:im.mimeType})))}catch{}show()};
   const go=(i,play)=>{cur=i;fell=0;url&&URL.revokeObjectURL(url);el.src=url=URL.createObjectURL(fs[i]);el.loop=mode===2;show();if(play)el.play().catch(()=>{el.muted=true;el.play().catch(()=>{})})};
   const next=auto=>{let n;if(shuf&&multi){do n=Math.random()*fs.length|0;while(n===cur)}else n=cur+1;
     if(n>=fs.length){if(!auto||mode===1)n=0;else return upd()}go(n,true)};
   el.onended=()=>next(true);
-  el.onerror=async()=>{if(fell++)return q('.ti').textContent='This browser can’t play this file.';
-    try{q('.ar').hidden=false;q('.ar').textContent='Preparing…';el.src=url=URL.createObjectURL(await prev(fs[cur],'wav','audio',{on:false}));show()}catch(e){q('.ar').hidden=false;q('.ar').textContent=why(e)}};
+  el.onerror=()=>{if(fell++)return q('.ti').textContent='This browser can’t play this file.';
+    busy(fs[cur].size>4e8?'Preparing large-file preview in chunks…':'Preparing preview…',async ui=>{el.src=url=URL.createObjectURL(await prev(fs[cur],'wav','audio',{on:false},ui));show()})};
   const resize=()=>{cv.width=cv.clientWidth*dpr;cv.height=cv.clientHeight*dpr;draw()};
   function draw(){
     const W=cv.width,H=cv.height,K=amp.length;
@@ -575,9 +617,9 @@ function mkAudio(fs,o={}){
     const xk=Math.min(W-6*dpr,Math.max(6*dpr,x0));g.fillStyle='#fff';g.fillRect(xk-dpr,0,2*dpr,H);g.beginPath();g.arc(xk,H/2,6*dpr,0,7);g.fill();
     q('.tt').textContent=`${tf(el.currentTime)} / ${tf(el.duration)}`;
   }
-  const loop=()=>{draw();if(!el.paused)raf=requestAnimationFrame(loop)};
+  const rest=k=>.2+.08*Math.sin(k*.9),loop=()=>{draw();if(!el.paused||amp.some((a,k)=>Math.abs(a-rest(k))>.004))raf=requestAnimationFrame(loop)};
   el.onplay=()=>{if(!AC)try{AC=new(window.AudioContext||webkitAudioContext)();const s=AC.createMediaElementSource(el);an=AC.createAnalyser();an.fftSize=1024;an.smoothingTimeConstant=.8;s.connect(an);an.connect(AC.destination);fd=new Uint8Array(an.frequencyBinCount)}catch{}AC&&AC.resume();upd();cancelAnimationFrame(raf);loop()};
-  el.onpause=()=>{upd();draw()};el.ontimeupdate=el.ondurationchange=el.onseeked=()=>{if(el.paused)draw()};
+  el.onpause=()=>{upd();cancelAnimationFrame(raf);loop()};el.ontimeupdate=el.ondurationchange=el.onseeked=()=>{if(el.paused)draw()};
   el.onvolumechange=()=>{q('[data-a=m]').innerHTML=svg(el.muted||!el.volume?'mute':'vol')};
   q('.vl').oninput=e=>{el.volume=+e.target.value;el.muted=false};
   q('.sp').onchange=e=>{const to=+e.target.value,from=el.playbackRate,t0=performance.now(),s=n=>{const k=Math.min(1,(n-t0)/500);el.playbackRate=from+(to-from)*k*k*(3-2*k);if(k<1)raf2=requestAnimationFrame(s)};cancelAnimationFrame(raf2);raf2=requestAnimationFrame(s)};let raf2;
