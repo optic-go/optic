@@ -1,9 +1,11 @@
-const V='optic-v3',S=self.registration.scope,U=p=>new URL(p,S).href,
+const V='optic-v4',S=self.registration.scope,U=p=>new URL(p,S).href,
 CORE=['./','index.html','manifest.json','icon-192.png','icon-512.png'].map(U),
 LIBS=['https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.cjs','https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.mjs','https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js'],
 M={ignoreSearch:true,ignoreVary:true};
 // Browsers refuse to show a redirected response for a page load, so store a clean copy.
 const clean=async r=>new Response(await r.blob(),{status:200,headers:{'Content-Type':r.headers.get('Content-Type')||'application/octet-stream'}});
+// Page loads get COOP/COEP headers: that makes the page cross-origin isolated, which the captions engine (threaded WebAssembly) requires. GitHub Pages can't set these itself.
+const iso=(r,res)=>{if(r.mode!=='navigate'||!res||res.type==='opaque'||res.type==='error')return res;const h=new Headers(res.headers);h.set('Cross-Origin-Opener-Policy','same-origin');h.set('Cross-Origin-Embedder-Policy','credentialless');return new Response(res.body,{status:res.status,statusText:res.statusText,headers:h})};
 // Every file is cached on its own: one missing file can never block the install.
 self.addEventListener('install',e=>e.waitUntil((async()=>{
   const c=await caches.open(V);
@@ -24,6 +26,8 @@ self.addEventListener('fetch',e=>{
     if(!hit&&r.mode==='navigate')hit=await c.match(U('./'),M)||await c.match(U('index.html'),M);
     if(hit&&!same)return hit;
     const net=fetch(r).then(async res=>{if(res.ok&&(same||LIBS.includes(r.url)))c.put(r,res.redirected?await clean(res):res.clone());return res}).catch(()=>null);
-    return hit||(await net)||(r.mode==='navigate'?new Response('Offline',{status:503}):Response.error());
+    if(hit)return iso(r,hit);
+    const res=await net;
+    return res?iso(r,res):(r.mode==='navigate'?new Response('Offline',{status:503}):Response.error());
   })());
 });
