@@ -516,22 +516,21 @@ async function ensureEngine(ui){
 }
 /* Decode the audio ourselves in small pieces (Mediabunny) and hand Transcribe.js ready-made 16 kHz mono samples.
    Its built-in loader decodes the whole file at once and returns null when that fails, which is what crashed before. */
-async function extractPcm(src,prog){
+async function extractChunks(src,secs,onChunk){
   const M=await loadMB(),input=new M.Input({source:new M.BlobSource(src),formats:M.ALL_FORMATS}),tk=await input.getPrimaryAudioTrack();
   if(!tk)throw Error('This video has no audio track to caption.');
   if(!(await tk.canDecode()))throw Error('Your browser can’t decode this video’s audio codec, so captions can’t be generated.');
-  const dur=await input.computeDuration(),sink=new M.AudioBufferSink(tk),parts=[];
-  let buf=new Float32Array(1<<20),n=0,total=0,acc=0,cnt=0,idx=0,next=0,r=0,first=true;
-  const emit=v=>{if(n===buf.length){parts.push(buf);buf=new Float32Array(1<<20);n=0}buf[n++]=v;total++};
+  const dur=await input.computeDuration(),sink=new M.AudioBufferSink(tk),size=secs*16000,buf=new Float32Array(size+16384);
+  let n=0,start=0,acc=0,cnt=0,idx=0,next=0,r=0,first=true,any=false;
+  const flush=async()=>{if(n>=8000){any=true;await onChunk(buf.subarray(0,n),start,dur?Math.min(1,(start+n/16000)/dur):0)}start+=n/16000;n=0};
   for await(const{buffer,timestamp}of sink.buffers()){
     const sr=buffer.sampleRate,ch=buffer.numberOfChannels,L=buffer.length,d=[];for(let c=0;c<ch;c++)d.push(buffer.getChannelData(c));
-    if(first){first=false;r=sr/16000;next=r;for(let i=Math.round(timestamp*16000);i>0;i--)emit(0)}
-    for(let i=0;i<L;i++){let v=0;for(let c=0;c<ch;c++)v+=d[c][i];acc+=v/ch;cnt++;idx++;if(idx>=next){emit(acc/cnt);acc=0;cnt=0;next+=r}}
-    if(dur)prog(Math.min(1,timestamp/dur));
+    if(first){first=false;r=sr/16000;next=r;start=timestamp}
+    for(let i=0;i<L;i++){let v=0;for(let c=0;c<ch;c++)v+=d[c][i];acc+=v/ch;cnt++;idx++;if(idx>=next){buf[n++]=acc/cnt;acc=0;cnt=0;next+=r}}
+    if(n>=size)await flush();
   }
-  parts.push(buf.subarray(0,n));const out=new Float32Array(total);let o=0;for(const x of parts){out.set(x,o);o+=x.length}
-  if(!total)throw Error('No audio could be read from this video.');
-  return out;
+  await flush();
+  if(!any&&first)throw Error('No audio could be read from this video.');
 }
 function parseCues(res){
   const p=x=>{const m=/(\d+):(\d+):(\d+)[,.](\d+)/.exec(x||'');return m?((+m[1]*60+ +m[2])*60+ +m[3])*1000+ +m[4].padEnd(3,'0').slice(0,3):0};
@@ -575,12 +574,13 @@ function attachCaps(P){
   cap.onpointermove=e=>{if(!cap.off)return;const r=w.getBoundingClientRect();let x=(e.clientX-cap.off[0]-r.left)/r.width*100,y=(e.clientY-cap.off[1]-r.top)/r.height*100;x=Math.min(98,Math.max(2,x));y=Math.min(98,Math.max(8,y));
     if(Math.hypot((x-CDEF.x)/100*r.width,(y-CDEF.y)/100*r.height)<40){x=CDEF.x;y=CDEF.y}C.x=x;C.y=y;apply()};
   cap.onpointerup=()=>{cap.off=null;save()};
-  const cb=mkBusy(w,ov,e=>askToast(why(e),['OK']));
+  const cb=mkBusy(w,ov,e=>askToast(/memory|alloc|RangeError/i.test((e&&e.name)+' '+(e&&e.message))?'Your device ran out of memory while generating captions. Close other tabs and apps and try again. OPTIC already works through the video in 5-minute pieces, so if this keeps happening the speech engine itself is too heavy for this device.':why(e),['OK']));
   bar.addEventListener('click',async e=>{
     const b=e.target.closest('[data-a]'),a=b&&b.dataset.a;if(a==='cs')return void(cs.hidden=!cs.hidden);if(a!=='cc')return;
     if(cues)return setOn(!on);
     const saved=await idb.get('captions',key).catch(()=>null);if(saved){cues=saved.cues;return setOn(true)}
     if(await askToast('Captions are generated ahead of time, not live. OPTIC will download the transcription engine and speech model once (about 60 MB, kept on this device), then transcribe the whole video before captions appear. Load captions?',['Load captions','Not now']))return;
+    el.pause();
     let src=f;const[,lab]=await sniff(f);
     if(!(lab==='MP4'&&/\.mp4$/i.test(f.name))){
       const c=await askToast(`Captions need a valid .mp4 file, and this one is ${lab==='MP4'?'named differently':'a '+lab+' file'}. Convert it first. What should happen to the converted file?`,['Replace the original','Save as a new .mp4','Just preview it (save nothing)','Cancel']);
@@ -595,11 +595,16 @@ function attachCaps(P){
       });
       if(src===f)return;
     }
-    let pcm=null,segs=null;
+    let segs=null;
     await cb('Downloading captions engine (one time)…',ui=>ensureEngine(ui));if(!TR)return;
-    await cb('Extracting audio…',async ui=>{pcm=await extractPcm(src,ui.prog)});if(!pcm)return;
-    await cb('Transcribing. This can take a few minutes…',async ui=>{TR.onProgress=p=>ui.prog(p/100);TR._loadAudio=async()=>pcm;
-      const r=await TR.transcribe(new File([new Uint8Array(1)],'audio.wav'),{lang:'auto',suppress_non_speech:true});segs=parseCues(r)});
+    await cb('Transcribing in short pieces. This can take a few minutes…',async ui=>{
+      segs=[];const th=Math.max(1,Math.min(2,(navigator.hardwareConcurrency||2)>>1));
+      /* 5-minute pieces keep memory small: only one piece of audio exists at a time */
+      await extractChunks(src,300,async(pcm,start,frac)=>{
+        TR._loadAudio=async()=>pcm;
+        const r=await TR.transcribe(new File([new Uint8Array(1)],'audio.wav'),{lang:'auto',threads:th,suppress_non_speech:true,token_timestamps:false});
+        parseCues(r).forEach(c=>segs.push({a:c.a+start,b:c.b+start,t:c.t}));ui.prog(frac)});
+    });
     if(!segs)return;cues=chunkCues(segs);if(!cues.length)return askToast('No speech was detected in this video.',['OK']);
     await idb.set('captions',key,{cues,name:f.name,at:Date.now()}).catch(()=>{});setOn(true);
   });
