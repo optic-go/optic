@@ -144,7 +144,8 @@ select:focus,input:focus-visible,button:focus-visible{outline:2px solid var(--in
 .cs select{background:#0007;color:#fff;border:1px solid #fff3;border-radius:7px;padding:3px 6px;font-size:13px}
 .cs input[type=color]{width:34px;height:24px;padding:0;border:0;background:none}
 .cs button{border:1px solid #fff3;background:none;color:#fff;border-radius:8px;padding:6px;font-size:13px}
-.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:50;display:grid;gap:12px;max-width:min(480px,92vw);padding:14px 16px;border-radius:14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);box-shadow:0 10px 36px #0005;font-size:14px;line-height:1.45}
+.toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:50;display:grid;gap:10px;width:min(480px,92vw)}
+.toast{display:grid;gap:12px;padding:14px 16px;border-radius:14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);box-shadow:0 10px 36px #0005;font-size:14px;line-height:1.45}
 .toast div{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
 .toast button{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:7px 13px;font-size:13.5px}
 .toast button.pri{background:var(--ink);color:var(--on);border-color:var(--ink)}
@@ -498,7 +499,7 @@ const idb=(()=>{let p;const db=()=>p||(p=new Promise((ok,no)=>{const r=indexedDB
   return{get:(s,k)=>tx(s,'readonly',o=>o.get(k)),set:(s,k,v)=>tx(s,'readwrite',o=>o.put(v,k))}})();
 const TLIB='https://cdn.jsdelivr.net/npm/@transcribe/transcriber@3.0.1/+esm',TSHOUT='https://cdn.jsdelivr.net/npm/@transcribe/shout/src/shout/shout.wasm.js',TMODEL='https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin';
 function askToast(msg,btns){return new Promise(ok=>{const t=document.createElement('div');t.className='toast';t.innerHTML='<p></p><div></div>';t.firstChild.textContent=msg;
-  btns.forEach((b,i)=>{const e=document.createElement('button');e.textContent=b;if(!i)e.className='pri';e.onclick=()=>{t.remove();ok(i)};t.lastChild.append(e)});(document.fullscreenElement||document.body).append(t)})}
+  btns.forEach((b,i)=>{const e=document.createElement('button');e.textContent=b;if(!i)e.className='pri';e.onclick=()=>{t.remove();ok(i)};t.lastChild.append(e)});let box=document.querySelector('.toasts');if(!box){box=document.createElement('div');box.className='toasts'}(document.fullscreenElement||document.body).append(box);box.append(t)})}
 async function getAsset(name,url,type,ui,label){
   let rec=await idb.get('assets',name).catch(()=>null);if(rec)return rec;
   const r=await fetch(url);if(!r.ok)throw Error(`Couldn’t download the ${label} (HTTP ${r.status}). Check your connection and try again.`);
@@ -506,13 +507,16 @@ async function getAsset(name,url,type,ui,label){
   for(;;){const{done,value}=await rd.read();if(done)break;parts.push(value);n+=value.length;ui.prog(len?n/len:0)}
   rec=new Blob(parts,{type});await idb.set('assets',name,rec).catch(()=>{});return rec;
 }
-let TR;
+let TR;const TRLOG=[];
 async function ensureEngine(ui){
   if(TR)return TR;
   if(!self.crossOriginIsolated)throw Error('The transcription engine needs offline app mode to be active. Reload this page once (a normal reload, not a hard refresh) and try again.');
   const lb=await getAsset('transcribe-lib',TLIB,'text/javascript',ui,'captions library'),sb=await getAsset('transcribe-shout',TSHOUT,'text/javascript',ui,'captions engine'),mb=await getAsset('model-ggml-base-q5_1',TMODEL,'application/octet-stream',ui,'speech model');
-  const L=await import(URL.createObjectURL(lb)),S=await import(URL.createObjectURL(sb)),F=L.FileTranscriber||(L.default&&L.default.FileTranscriber);
-  const tr=new F({createModule:S.default,model:new File([mb],'ggml-base-q5_1.bin')});await tr.init();return TR=tr;
+  if(!navigator.serviceWorker||!navigator.serviceWorker.controller)throw Error('Offline app mode isn’t active yet. Reload the page once (a normal reload, not a hard refresh) and try again.');
+  /* The service worker serves the copies kept in IndexedDB from real URLs (blob: URLs break the library's relative paths and worker start-up). */
+  const base=new URL('_opt/',document.baseURI).href,L=await import(base+'transcriber.js'),S=await import(base+'shout.wasm.js'),F=L.FileTranscriber||(L.default&&L.default.FileTranscriber);
+  const lg=m=>{TRLOG.push(String(m));if(TRLOG.length>60)TRLOG.shift()};
+  const tr=new F({createModule:S.default,model:new File([mb],'ggml-base-q5_1.bin'),print:lg,printErr:lg,onAbort:()=>lg('Engine aborted')});await tr.init();return TR=tr;
 }
 /* Decode the audio ourselves in small pieces (Mediabunny) and hand Transcribe.js ready-made 16 kHz mono samples.
    Its built-in loader decodes the whole file at once and returns null when that fails, which is what crashed before. */
@@ -602,10 +606,10 @@ function attachCaps(P){
       /* 5-minute pieces keep memory small: only one piece of audio exists at a time */
       await extractChunks(src,300,async(pcm,start,frac)=>{
         TR._loadAudio=async()=>pcm;
-        const r=await TR.transcribe(new File([new Uint8Array(1)],'audio.wav'),{lang:'auto',threads:th,suppress_non_speech:true,token_timestamps:false});
+        const r=await TR.transcribe(new File([new Uint8Array(1)],'audio.wav'),{lang:'auto',threads:th,token_timestamps:false});
         parseCues(r).forEach(c=>segs.push({a:c.a+start,b:c.b+start,t:c.t}));ui.prog(frac)});
     });
-    if(!segs)return;cues=chunkCues(segs);if(!cues.length)return askToast('No speech was detected in this video.',['OK']);
+    if(!segs)return;cues=chunkCues(segs);if(!cues.length)return askToast('No speech was detected in this video.'+(TRLOG.length?' Engine log: '+TRLOG.slice(-3).join(' | ').slice(0,300):''),['OK']);
     await idb.set('captions',key,{cues,name:f.name,at:Date.now()}).catch(()=>{});setOn(true);
   });
 }
