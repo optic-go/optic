@@ -1,7 +1,15 @@
-const V='optic-v4',S=self.registration.scope,U=p=>new URL(p,S).href,
+const V='optic-v5',S=self.registration.scope,U=p=>new URL(p,S).href,
 CORE=['./','index.html','manifest.json','icon-192.png','icon-512.png'].map(U),
 LIBS=['https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.cjs','https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.mjs','https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js'],
 M={ignoreSearch:true,ignoreVary:true};
+// Captions engine files live in IndexedDB; serve them from real same-origin URLs (/_opt/...) so the library can resolve relative paths and start its workers.
+const ASSETS={'transcriber.js':'transcribe-lib','shout.wasm.js':'transcribe-shout'};
+const idbGet=k=>new Promise((ok,no)=>{const q=indexedDB.open('optic',1);q.onupgradeneeded=()=>q.transaction.abort();q.onerror=()=>no(q.error);q.onsuccess=()=>{try{const g=q.result.transaction('assets').objectStore('assets').get(k);g.onsuccess=()=>ok(g.result);g.onerror=()=>no(g.error)}catch(e){no(e)}}});
+async function opt(u){
+  const f=u.pathname.split('/_opt/')[1];let b=ASSETS[f]?await idbGet(ASSETS[f]).catch(()=>null):null;
+  if(!b){const res=await fetch('https://cdn.jsdelivr.net/npm/@transcribe/shout/src/shout/'+f,{mode:'cors'}).catch(()=>null);if(!res||!res.ok)return new Response('Not found',{status:404});b=await res.blob()}
+  return new Response(b,{headers:{'Content-Type':f.endsWith('.wasm')?'application/wasm':'text/javascript','Cross-Origin-Embedder-Policy':'credentialless','Cross-Origin-Resource-Policy':'same-origin'}});
+}
 // Browsers refuse to show a redirected response for a page load, so store a clean copy.
 const clean=async r=>new Response(await r.blob(),{status:200,headers:{'Content-Type':r.headers.get('Content-Type')||'application/octet-stream'}});
 // Page loads get COOP/COEP headers: that makes the page cross-origin isolated, which the captions engine (threaded WebAssembly) requires. GitHub Pages can't set these itself.
@@ -20,6 +28,7 @@ self.addEventListener('activate',e=>e.waitUntil((async()=>{
 })()));
 self.addEventListener('fetch',e=>{
   const r=e.request;if(r.method!=='GET')return;
+  const u=new URL(r.url);if(u.origin===location.origin&&u.pathname.includes('/_opt/'))return e.respondWith(opt(u));
   e.respondWith((async()=>{
     const c=await caches.open(V),same=new URL(r.url).origin===location.origin;
     let hit=await c.match(r,M);
