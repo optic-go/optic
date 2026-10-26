@@ -510,18 +510,21 @@ async function getAsset(name,url,type,ui,label){
 let TR,GPUE;const TRLOG=[];
 const TFJS='https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/dist/transformers.min.js';
 const hasGpu=async()=>{try{return!!(navigator.gpu&&await navigator.gpu.requestAdapter())}catch{return false}};
+/* low-RAM safeguards: measure this tab's real memory use (Chrome, needs the isolated mode we already enable) */
+async function memUsed(){try{if(performance.measureUserAgentSpecificMemory)return(await performance.measureUserAgentSpecificMemory()).bytes}catch{}return performance.memory?performance.memory.usedJSHeapSize:0}
+async function freeEngines(){try{GPUE&&await GPUE.dispose()}catch{}GPUE=null;try{TR&&TR.destroy()}catch{}TR=null}
 const eta=s=>s<60?'under a minute':s<3600?Math.round(s/60)+' min':Math.floor(s/3600)+' h '+Math.round(s%3600/60)+' min';
 /* GPU path: Transformers.js + Whisper (ONNX) on WebGPU. Library and model files are kept in IndexedDB too. */
-async function ensureGpu(ui){
+async function ensureGpu(ui,low){
   if(GPUE)return GPUE;
   if(!navigator.serviceWorker||!navigator.serviceWorker.controller)throw Error('Offline app mode isn’t active yet. Reload the page once (a normal reload) and try again.');
   await getAsset('tfjs-lib',TFJS,'text/javascript',ui,'GPU captions library');
   const T=await import(new URL('_opt/transformers.js',document.baseURI).href),env=T.env;
-  env.allowLocalModels=false;env.useBrowserCache=false;env.useCustomCache=true;
+  env.allowLocalModels=false;try{env.backends.onnx.wasm.numThreads=1;env.backends.onnx.wasm.proxy=false}catch{}env.useBrowserCache=false;env.useCustomCache=true;
   env.customCache={match:async k=>{const r=await idb.get('assets','tf:'+k).catch(()=>null);return r?new Response(r.b,{headers:{'Content-Type':r.t}}):undefined},
     put:async(k,res)=>{const b=await res.blob();await idb.set('assets','tf:'+k,{b,t:res.headers.get('Content-Type')||'application/octet-stream'})}};
-  const asr=await T.pipeline('automatic-speech-recognition','onnx-community/whisper-base',{device:'webgpu',dtype:{encoder_model:'fp32',decoder_model_merged:'q4'},progress_callback:d=>{if(d.status==='progress'&&d.progress!=null)ui.prog(d.progress/100)}});
-  return GPUE={run:async pcm=>{const o=await asr(pcm,{chunk_length_s:30,stride_length_s:5,return_timestamps:true,task:'transcribe'});
+  const asr=await T.pipeline('automatic-speech-recognition',low?'onnx-community/whisper-tiny':'onnx-community/whisper-base',{device:'webgpu',dtype:{encoder_model:'fp32',decoder_model_merged:'q4'},progress_callback:d=>{if(d.status==='progress'&&d.progress!=null)ui.prog(d.progress/100)}});
+  return GPUE={dispose:()=>asr.dispose(),run:async pcm=>{const o=await asr(pcm,{chunk_length_s:30,stride_length_s:5,return_timestamps:true,task:'transcribe'});
     return(o.chunks||[]).map(c=>({a:c.timestamp[0],b:c.timestamp[1]==null?c.timestamp[0]+2:c.timestamp[1],t:(c.text||'').trim()})).filter(x=>x.t)}};
 }
 async function ensureEngine(ui){
@@ -615,10 +618,12 @@ function attachCaps(P){
       });
       if(src===f)return;
     }
-    let segs=null,eng=null,gpu=await hasGpu();
-    if(!gpu&&await askToast(`This device has no WebGPU, so transcription runs on the CPU and can take about as long as the video itself${el.duration?' (roughly '+Math.round(el.duration/60)+' min)':''}. Continue anyway?`,['Continue','Cancel']))return;
+    let segs=null,eng=null,ok=false,gpu=await hasGpu();
+    const low=(navigator.deviceMemory||8)<=4||(navigator.hardwareConcurrency||8)<=4,lim=low?650e6:1e9;
+    if(gpu&&low){const c=await askToast(`This device has limited RAM (about ${navigator.deviceMemory||'a few'} GB). GPU captions will use a lightweight model (a little less accurate) to stay under about 650 MB, but a weak graphics chip can still struggle. Which do you want?`,['GPU, lightweight model','CPU (slower, safest)','Cancel']);if(c===2)return;if(c===1)gpu=false}
+    else if(!gpu&&await askToast(`This device has no WebGPU, so transcription runs on the CPU and can take about as long as the video itself${el.duration?' (roughly '+Math.round(el.duration/60)+' min)':''}. Continue anyway?`,['Continue','Cancel']))return;
     await cb('Downloading captions engine (one time)…',async ui=>{
-      if(gpu)try{eng=await ensureGpu(ui)}catch(e){console.warn('GPU captions unavailable:',e);gpu=false;askToast('GPU captions couldn’t start ('+((e&&e.message)||e)+'). Falling back to the slower CPU engine.',['OK'])}
+      if(gpu)try{eng=await ensureGpu(ui,low)}catch(e){console.warn('GPU captions unavailable:',e);gpu=false;askToast('GPU captions couldn’t start ('+((e&&e.message)||e)+'). Falling back to the slower CPU engine.',['OK'])}
       if(!eng){await ensureEngine(ui);const th=Math.max(1,Math.min(2,(navigator.hardwareConcurrency||2)>>1));
         eng={run:async pcm=>{TR._loadAudio=async()=>pcm;return parseCues(await TR.transcribe(new File([new Uint8Array(1)],'audio.wav'),{lang:'auto',threads:th,token_timestamps:false}))}}}
     });
@@ -626,11 +631,12 @@ function attachCaps(P){
     const t0=performance.now();
     await cb(gpu?'Transcribing on your GPU…':'Transcribing on your CPU…',async ui=>{
       segs=[];ui.prog(0,'estimating time…');
-      await extractChunks(src,120,async(pcm,start,frac)=>{
+      await extractChunks(src,low?60:120,async(pcm,start,frac)=>{
+        const m=await memUsed();if(m>lim)throw Error(`Stopped to protect your device: this tab reached ${Math.round(m/1e6)} MB of RAM (limit ${Math.round(lim/1e6)} MB). Close other tabs and try again, or choose the CPU option.`);
         (await eng.run(pcm)).forEach(c=>segs.push({a:c.a+start,b:c.b+start,t:c.t}));
-        const s=(performance.now()-t0)/1000;ui.prog(frac,frac<.995?'about '+eta(s/Math.max(frac,.001)*(1-frac))+' left':'finishing…')});
+        const s=(performance.now()-t0)/1000;ui.prog(frac,frac<.995?'about '+eta(s/Math.max(frac,.001)*(1-frac))+' left':'finishing…')});ok=true;
     });
-    if(!segs)return;cues=chunkCues(segs);if(!cues.length)return askToast('No speech was detected in this video.'+(TRLOG.length?' Engine log: '+TRLOG.slice(-3).join(' | ').slice(0,300):''),['OK']);
+    await freeEngines();if(!ok)return;cues=chunkCues(segs);if(!cues.length)return askToast('No speech was detected in this video.'+(TRLOG.length?' Engine log: '+TRLOG.slice(-3).join(' | ').slice(0,300):''),['OK']);
     await idb.set('captions',key,{cues,name:f.name,at:Date.now()}).catch(()=>{});setOn(true);
   });
 }
