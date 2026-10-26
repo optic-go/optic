@@ -514,6 +514,25 @@ async function ensureEngine(ui){
   const L=await import(URL.createObjectURL(lb)),S=await import(URL.createObjectURL(sb)),F=L.FileTranscriber||(L.default&&L.default.FileTranscriber);
   const tr=new F({createModule:S.default,model:new File([mb],'ggml-base-q5_1.bin')});await tr.init();return TR=tr;
 }
+/* Decode the audio ourselves in small pieces (Mediabunny) and hand Transcribe.js ready-made 16 kHz mono samples.
+   Its built-in loader decodes the whole file at once and returns null when that fails, which is what crashed before. */
+async function extractPcm(src,prog){
+  const M=await loadMB(),input=new M.Input({source:new M.BlobSource(src),formats:M.ALL_FORMATS}),tk=await input.getPrimaryAudioTrack();
+  if(!tk)throw Error('This video has no audio track to caption.');
+  if(!(await tk.canDecode()))throw Error('Your browser can’t decode this video’s audio codec, so captions can’t be generated.');
+  const dur=await input.computeDuration(),sink=new M.AudioBufferSink(tk),parts=[];
+  let buf=new Float32Array(1<<20),n=0,total=0,acc=0,cnt=0,idx=0,next=0,r=0,first=true;
+  const emit=v=>{if(n===buf.length){parts.push(buf);buf=new Float32Array(1<<20);n=0}buf[n++]=v;total++};
+  for await(const{buffer,timestamp}of sink.buffers()){
+    const sr=buffer.sampleRate,ch=buffer.numberOfChannels,L=buffer.length,d=[];for(let c=0;c<ch;c++)d.push(buffer.getChannelData(c));
+    if(first){first=false;r=sr/16000;next=r;for(let i=Math.round(timestamp*16000);i>0;i--)emit(0)}
+    for(let i=0;i<L;i++){let v=0;for(let c=0;c<ch;c++)v+=d[c][i];acc+=v/ch;cnt++;idx++;if(idx>=next){emit(acc/cnt);acc=0;cnt=0;next+=r}}
+    if(dur)prog(Math.min(1,timestamp/dur));
+  }
+  parts.push(buf.subarray(0,n));const out=new Float32Array(total);let o=0;for(const x of parts){out.set(x,o);o+=x.length}
+  if(!total)throw Error('No audio could be read from this video.');
+  return out;
+}
 function parseCues(res){
   const p=x=>{const m=/(\d+):(\d+):(\d+)[,.](\d+)/.exec(x||'');return m?((+m[1]*60+ +m[2])*60+ +m[3])*1000+ +m[4].padEnd(3,'0').slice(0,3):0};
   return(res.transcription||res.segments||[]).map(s=>{const o=s.offsets||{from:p(s.timestamps&&s.timestamps.from),to:p(s.timestamps&&s.timestamps.to)};return{a:o.from/1000,b:o.to/1000,t:(s.text||'').trim()}}).filter(x=>x.t);
@@ -576,9 +595,11 @@ function attachCaps(P){
       });
       if(src===f)return;
     }
-    let segs=null;
+    let pcm=null,segs=null;
     await cb('Downloading captions engine (one time)…',ui=>ensureEngine(ui));if(!TR)return;
-    await cb('Transcribing. This can take a few minutes…',async ui=>{const r=await TR.transcribe(src instanceof File?src:new File([src],'video.mp4'),{lang:'auto',onProgress:p=>ui.prog(p>1?p/100:p)});segs=parseCues(r)});
+    await cb('Extracting audio…',async ui=>{pcm=await extractPcm(src,ui.prog)});if(!pcm)return;
+    await cb('Transcribing. This can take a few minutes…',async ui=>{TR.onProgress=p=>ui.prog(p/100);TR._loadAudio=async()=>pcm;
+      const r=await TR.transcribe(new File([new Uint8Array(1)],'audio.wav'),{lang:'auto',suppress_non_speech:true});segs=parseCues(r)});
     if(!segs)return;cues=chunkCues(segs);if(!cues.length)return askToast('No speech was detected in this video.',['OK']);
     await idb.set('captions',key,{cues,name:f.name,at:Date.now()}).catch(()=>{});setOn(true);
   });
