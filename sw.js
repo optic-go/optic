@@ -1,12 +1,13 @@
-const V='optic-v5',S=self.registration.scope,U=p=>new URL(p,S).href,
+const V='optic-v6',S=self.registration.scope,U=p=>new URL(p,S).href,
 CORE=['./','index.html','manifest.json','icon-192.png','icon-512.png'].map(U),
 LIBS=['https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.cjs','https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.mjs','https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js'],
 M={ignoreSearch:true,ignoreVary:true};
 // Captions engine files live in IndexedDB; serve them from real same-origin URLs (/_opt/...) so the library can resolve relative paths and start its workers.
-const ASSETS={'transcriber.js':'transcribe-lib','shout.wasm.js':'transcribe-shout'};
+const ASSETS={'transcriber.js':'transcribe-lib','shout.wasm.js':'transcribe-shout','transformers.js':'tfjs-lib'};
 const idbGet=k=>new Promise((ok,no)=>{const q=indexedDB.open('optic',1);q.onupgradeneeded=()=>q.transaction.abort();q.onerror=()=>no(q.error);q.onsuccess=()=>{try{const g=q.result.transaction('assets').objectStore('assets').get(k);g.onsuccess=()=>ok(g.result);g.onerror=()=>no(g.error)}catch(e){no(e)}}});
 async function opt(u){
   const f=u.pathname.split('/_opt/')[1];let b=ASSETS[f]?await idbGet(ASSETS[f]).catch(()=>null):null;
+  if(!b&&ASSETS[f])return new Response('Not found',{status:404});
   if(!b){const res=await fetch('https://cdn.jsdelivr.net/npm/@transcribe/shout/src/shout/'+f,{mode:'cors'}).catch(()=>null);if(!res||!res.ok)return new Response('Not found',{status:404});b=await res.blob()}
   return new Response(b,{headers:{'Content-Type':f.endsWith('.wasm')?'application/wasm':'text/javascript','Cross-Origin-Embedder-Policy':'credentialless','Cross-Origin-Resource-Policy':'same-origin'}});
 }
@@ -34,7 +35,7 @@ self.addEventListener('fetch',e=>{
     let hit=await c.match(r,M);
     if(!hit&&r.mode==='navigate')hit=await c.match(U('./'),M)||await c.match(U('index.html'),M);
     if(hit&&!same)return hit;
-    const net=fetch(r).then(async res=>{if(res.ok&&(same||LIBS.includes(r.url)))c.put(r,res.redirected?await clean(res):res.clone());return res}).catch(()=>null);
+    const net=fetch(r).then(async res=>{if(res.ok&&(same||LIBS.includes(r.url)||/^https:\/\/cdn\.jsdelivr\.net\/npm\/@huggingface\//.test(r.url)))c.put(r,res.redirected?await clean(res):res.clone());return res}).catch(()=>null);
     if(hit)return iso(r,hit);
     const res=await net;
     return res?iso(r,res):(r.mode==='navigate'?new Response('Offline',{status:503}):Response.error());
