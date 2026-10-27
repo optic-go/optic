@@ -852,21 +852,53 @@ async function trimCover(u){
     return URL.createObjectURL(await new Promise(ok=>o.toBlob(ok,'image/png')));
   }catch(e){console.warn('Cover trim skipped:',e);return u}
 }
-/* Write title / artist / cover into an MP3's ID3v2.3 tag (undefined = leave as is, null cover = remove). Audio data is never loaded into memory. */
-async function writeId3(f,e){
+/* MP3 helpers: find where real audio frames start (so the tag size is never trusted blindly), write ID3v2.3 safely, repair damaged files */
+function mpegLen(b,o){
+  if(o+4>b.length||b[o]!==255||(b[o+1]&224)!==224)return 0;
+  const v=(b[o+1]>>3)&3,l=(b[o+1]>>1)&3,br=b[o+2]>>4,sr=(b[o+2]>>2)&3,pad=(b[o+2]>>1)&1;
+  if(v===1||l!==1||br===0||br===15||sr===3)return 0;
+  const B1=[0,32,40,48,56,64,80,96,112,128,160,192,224,256,320],B2=[0,8,16,24,32,40,48,56,64,80,96,112,128,144,160],rate=[44100,48000,32000][sr]>>(v===3?0:v===2?1:2);
+  return Math.floor((v===3?144:72)*(v===3?B1:B2)[br]*1000/rate)+pad;
+}
+const chainOk=(b,o)=>{let p=o,n=0;while(n<5){const l=mpegLen(b,p);if(!l)break;p+=l;n++}return n>=4||(n>=1&&p>=b.length-4)};
+const audioAt=async(f,off)=>chainOk(new Uint8Array(await f.slice(off,off+16384).arrayBuffer()),0);
+async function findAudioStart(f,from){const b=new Uint8Array(await f.slice(0,Math.min(f.size,8e6)).arrayBuffer());for(let o=from;o+4<b.length;o++)if(b[o]===255&&(b[o+1]&224)===224&&chainOk(b,o))return o;return null}
+async function writeId3(f,e,audioOff){
   const h=new Uint8Array(await f.slice(0,10).arrayBuffer());let off=0;const old=[];
-  if(h[0]===73&&h[1]===68&&h[2]===51){const ver=h[3];off=10+((h[6]<<21)|(h[7]<<14)|(h[8]<<7)|h[9]);
-    if(ver===3||ver===4){const b=new Uint8Array(await f.slice(10,off).arrayBuffer());let p=0;
-      while(p+10<=b.length&&b[p]){const id=String.fromCharCode(b[p],b[p+1],b[p+2],b[p+3]),s=ver===4?((b[p+4]<<21)|(b[p+5]<<14)|(b[p+6]<<7)|b[p+7]):new DataView(b.buffer,b.byteOffset+p+4,4).getUint32(0);
-        if(p+10+s>b.length)break;old.push({id,data:b.slice(p+10,p+10+s)});p+=10+s}}}
+  if(h[0]===73&&h[1]===68&&h[2]===51){
+    const ver=h[3],fl=h[5],sz=(h[6]<<21)|(h[7]<<14)|(h[8]<<7)|h[9];let end=10+sz+((fl&16)?10:0),bodyEnd=10+sz;off=end;
+    if(audioOff==null){if(!(await audioAt(f,off))){const s=await findAudioStart(f,10);if(s!=null)off=s}}else{off=audioOff;bodyEnd=Math.min(bodyEnd,off)}
+    if((ver===3||ver===4)&&!(fl&0x80)){const b=new Uint8Array(await f.slice(10,Math.max(10,Math.min(bodyEnd,off))).arrayBuffer());let p=0;
+      if(fl&0x40&&b.length>4)p=ver===4?((b[0]<<21)|(b[1]<<14)|(b[2]<<7)|b[3]):4+new DataView(b.buffer,b.byteOffset).getUint32(0);
+      while(p+10<=b.length){const id=String.fromCharCode(b[p],b[p+1],b[p+2],b[p+3]);if(!/^[A-Z0-9]{4}$/.test(id))break;
+        const s=ver===4?((b[p+4]<<21)|(b[p+5]<<14)|(b[p+6]<<7)|b[p+7]):new DataView(b.buffer,b.byteOffset+p+4,4).getUint32(0);
+        if(p+10+s>b.length)break;if(!b[p+8]&&!b[p+9])old.push({id,data:b.slice(p+10,p+10+s)});p+=10+s}}
+  }
   const txt=(id,s)=>{const u=new Uint8Array(3+s.length*2);u[0]=1;u[1]=255;u[2]=254;for(let i=0;i<s.length;i++){u[3+i*2]=s.charCodeAt(i)&255;u[4+i*2]=s.charCodeAt(i)>>8}return{id,data:u}};
   const fr=old.filter(x=>!(x.id==='TIT2'&&e.title!==undefined)&&!(x.id==='TPE1'&&e.artist!==undefined)&&!(x.id==='APIC'&&e.cover!==undefined));
   if(e.title)fr.push(txt('TIT2',e.title));if(e.artist)fr.push(txt('TPE1',e.artist));
-  if(e.cover){const img=new Uint8Array(await e.cover.arrayBuffer()),mime=[...'image/jpeg'].map(c=>c.charCodeAt(0)),d=new Uint8Array(1+mime.length+1+1+1+img.length);d.set(mime,1);d[1+mime.length+1]=3;d.set(img,1+mime.length+3);fr.push({id:'APIC',data:d})}
+  if(e.cover){const img=new Uint8Array(await e.cover.arrayBuffer()),mime=[...'image/jpeg'].map(c=>c.charCodeAt(0)),d=new Uint8Array(1+mime.length+3+img.length);d.set(mime,1);d[1+mime.length+1]=3;d.set(img,1+mime.length+3);fr.push({id:'APIC',data:d})}
   const body=fr.reduce((n,x)=>n+10+x.data.length,0),tag=new Uint8Array(10+body),dv=new DataView(tag.buffer);
   tag.set([73,68,51,3,0,0,(body>>21)&127,(body>>14)&127,(body>>7)&127,body&127]);let p=10;
   for(const x of fr){for(let i=0;i<4;i++)tag[p+i]=x.id.charCodeAt(i);dv.setUint32(p+4,x.data.length);tag.set(x.data,p+10);p+=10+x.data.length}
   return new Blob([tag,f.slice(off)],{type:'audio/mpeg'});
+}
+/* Repair for MP3s whose audio no longer starts where the tag says (e.g. damaged by an earlier tag edit): finds the real first audio frame and rebuilds a clean tag. Returns null when nothing is wrong. */
+async function repairMp3(f){
+  const h=new Uint8Array(await f.slice(0,10).arrayBuffer()),has=h[0]===73&&h[1]===68&&h[2]===51,declared=has?10+((h[6]<<21)|(h[7]<<14)|(h[8]<<7)|h[9])+((h[5]&16)?10:0):0;
+  if(await audioAt(f,declared))return null;
+  const a=await findAudioStart(f,has?10:0);if(a==null)throw Error('No valid MP3 audio was found in this file, so it can’t be repaired.');
+  return has?writeId3(f,{},a):new Blob([f.slice(a)],{type:'audio/mpeg'});
+}
+/* Overwrite with a safety net: copy the original aside first, write, verify the result, and restore the original if the check fails. */
+async function safeWrite(h,f,blob,backup){
+  let bak=null,dir=null;const head=await blob.slice(0,32768).arrayBuffer(),tail=await blob.slice(Math.max(0,blob.size-32768)).arrayBuffer();
+  if(backup)try{dir=await navigator.storage.getDirectory();bak=await dir.getFileHandle('optic-bak-'+Date.now()+'.bin',{create:true});const w=await bak.createWritable();await w.write(f);await w.close()}catch{bak=null}
+  const wr=await h.createWritable();await wr.write(blob);await wr.close();
+  const g=await h.getFile(),eq=(x,y)=>{const a=new Uint8Array(x),b=new Uint8Array(y);return a.length===b.length&&a.every((v,i)=>v===b[i])};
+  const ok=g.size===blob.size&&eq(await g.slice(0,32768).arrayBuffer(),head)&&eq(await g.slice(Math.max(0,g.size-32768)).arrayBuffer(),tail);
+  if(!ok){if(bak){const w=await h.createWritable();await w.write(await bak.getFile());await w.close();throw Error('The saved file failed a safety check, so your original was put back. Nothing was changed.')}throw Error('The saved file failed a safety check. Use Repair file to recover it.')}
+  if(bak)try{await dir.removeEntry(bak.name)}catch{}
 }
 function mkAudio(fs,o={}){
   const w=document.createElement('div'),el=document.createElement('audio'),multi=fs.length>1,dpr=devicePixelRatio||1,meta=fs.map(f=>({t:f.name.replace(/\.[^.]*$/,''),a:'',img:''}));
@@ -894,7 +926,10 @@ function mkAudio(fs,o={}){
   const next=auto=>{let p=pos+1;if(p>=order.length){if(!auto||mode===1)p=0;else return upd()}go(order[p],true)};
   const prevT=()=>el.currentTime>3?el.currentTime=0:go(order[(pos-1+order.length)%order.length],true);
   el.onended=()=>next(true);
-  el.onerror=()=>{if(fell++)return q('.ti').textContent='This browser can’t play this file.';
+  el.onerror=async()=>{if(fell++)return q('.ti').textContent='This browser can’t play this file.';
+    if(mp3(cur)){const r=await repairMp3(fs[cur]).catch(()=>null);
+      if(r){const c=await askToast('This MP3 won’t play, and its audio doesn’t start where its tag says: the typical sign of a damaged tag edit. OPTIC can repair it and keep all the audio.',['Repair and overwrite the file','Repair and save a copy','Not now']);
+        if(c<2){try{await writeOut(r,c===1);go(cur,true);return}catch(er){if(er.name!=='AbortError')askToast(why(er),['OK'])}}}}
     busy(fs[cur].size>4e8?'Preparing large-file preview in chunks…':'Preparing preview…',async ui=>{el.src=url=URL.createObjectURL(await prev(fs[cur],'wav','audio',{on:false},ui));show()})};
   const resize=()=>{cv.width=cv.clientWidth*dpr;cv.height=cv.clientHeight*dpr;draw()};
   function draw(){
@@ -935,22 +970,23 @@ function mkAudio(fs,o={}){
     ['loadedmetadata','ratechange','seeked','play','pause'].forEach(ev=>el.addEventListener(ev,msPos))}
   /* track editor: title, artist and cover; saved into the .mp3 itself */
   const mp3=i=>/\.mp3$/i.test(fs[i].name)||fs[i].type==='audio/mpeg',ed={};
-  w.insertAdjacentHTML('beforeend','<div class="ae" hidden><div class="aeh">Edit track info</div><label>Title<input type="text" class="et"></label><label>Artist<input type="text" class="ea"></label><div class="aec"><img class="eci" alt="" hidden><div><button data-e="pick">Choose image…</button> <button data-e="rm">Remove image</button></div></div><input type="file" accept="image/*" class="ef" hidden><div class="aeb"><button data-e="save" class="pri">Save to file</button><button data-e="as">Save as…</button><button data-e="x">Done</button></div><p class="aen"></p></div>');
+  w.insertAdjacentHTML('beforeend','<div class="ae" hidden><div class="aeh">Edit track info</div><label>Title<input type="text" class="et"></label><label>Artist<input type="text" class="ea"></label><div class="aec"><img class="eci" alt="" hidden><div><button data-e="pick">Choose image…</button> <button data-e="rm">Remove image</button></div></div><input type="file" accept="image/*" class="ef" hidden><div class="aeb"><button data-e="save" class="pri">Save to file</button><button data-e="as">Save as…</button><button data-e="fix">Repair file</button><button data-e="x">Done</button></div><p class="aen"></p></div>');
   const ae=q('.ae'),et=q('.et'),ea=q('.ea'),eci=q('.eci'),ef=q('.ef'),aen=q('.aen');
-  const openEd=()=>{const m=meta[cur];et.value=m.t;ea.value=m.a;eci.src=m.img||'';eci.hidden=!m.img;aen.textContent=mp3(cur)?'':'Saving into the file works for .mp3 files. Changes here only last for this session.';ae.querySelectorAll('[data-e=save],[data-e=as]').forEach(b=>b.hidden=!mp3(cur));ae.hidden=false};
+  const openEd=()=>{const m=meta[cur];et.value=m.t;ea.value=m.a;eci.src=m.img||'';eci.hidden=!m.img;aen.textContent=mp3(cur)?'':'Saving into the file works for .mp3 files. Changes here only last for this session.';ae.querySelectorAll('[data-e=save],[data-e=as],[data-e=fix]').forEach(b=>b.hidden=!mp3(cur));ae.hidden=false};
   ae.oninput=e=>{if(e.target===et){meta[cur].t=et.value;meta[cur].tt=1}if(e.target===ea){meta[cur].a=ea.value;meta[cur].at=1}show()};
   ef.onchange=async()=>{const f0=ef.files[0];if(!f0)return;try{const bm=await createImageBitmap(f0),s=Math.min(1,800/Math.max(bm.width,bm.height)),c=document.createElement('canvas');c.width=Math.round(bm.width*s);c.height=Math.round(bm.height*s);c.getContext('2d').drawImage(bm,0,0,c.width,c.height);
     const b=await new Promise(r=>c.toBlob(r,'image/jpeg',.9));(ed[cur]=ed[cur]||{}).cover=b;meta[cur].img=URL.createObjectURL(b);eci.src=meta[cur].img;eci.hidden=false;show()}catch{aen.textContent='That image couldn’t be read.'}ef.value=''};
-  const saveTags=async asNew=>{const f=fs[cur],m=meta[cur];let h=o.handles&&o.handles[cur]&&!asNew?o.handles[cur]:null;
-    const blob=await writeId3(f,{title:m.tt?m.t:undefined,artist:m.at?m.a:undefined,cover:(ed[cur]||{}).cover});
+  const writeOut=async(blob,asNew)=>{const f=fs[cur];let h=o.handles&&o.handles[cur]&&!asNew?o.handles[cur]:null;const over=!!h;
     if(h){if(h.requestPermission&&await h.requestPermission({mode:'readwrite'})!=='granted')throw Error('Permission to overwrite the file was denied. Use Save as instead.')}
     else if('showSaveFilePicker'in window)h=await showSaveFilePicker({suggestedName:f.name,id:'convertify',types:[{accept:{'audio/mpeg':['.mp3']}}]});
-    if(h){const wr=await h.createWritable();await wr.write(blob);await wr.close()}
-    else{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=f.name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4e3)}
-    fs[cur]=new File([blob],h?h.name:f.name,{type:'audio/mpeg'});ed[cur]={}};
+    if(h){await safeWrite(h,f,blob,over);fs[cur]=await h.getFile()}
+    else{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=f.name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4e3);fs[cur]=new File([blob],f.name,{type:'audio/mpeg'})}
+    ed[cur]={}};
+  const saveTags=async asNew=>{const m=meta[cur];await writeOut(await writeId3(fs[cur],{title:m.tt?m.t:undefined,artist:m.at?m.a:undefined,cover:(ed[cur]||{}).cover}),asNew)};
   ae.onclick=async e=>{const k=e.target.dataset.e;if(!k)return;if(k==='pick')return ef.click();
     if(k==='rm'){ed[cur]={...ed[cur],cover:null};meta[cur].img='';eci.hidden=true;show()}
     if(k==='x')ae.hidden=true;
+    if(k==='fix')try{aen.textContent='Checking…';const r=await repairMp3(fs[cur]);if(!r){aen.textContent='No damage found: the audio already starts where the tag says it should.';return}aen.textContent='Repairing…';await writeOut(r,false);aen.textContent='Repaired and saved.';go(cur,true)}catch(er){aen.textContent=er.name==='AbortError'?'':why(er)}
     if(k==='save'||k==='as')try{aen.textContent='Saving…';await saveTags(k==='as');aen.textContent='Saved.'}catch(er){aen.textContent=er.name==='AbortError'?'':why(er)}};
   new ResizeObserver(resize).observe(cv);go(0,false);fs.forEach((_,i)=>setTimeout(()=>readMeta(i),i*30));
   if(o.auto)el.play().catch(()=>{el.muted=true;el.play().catch(()=>{})});
