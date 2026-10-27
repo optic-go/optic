@@ -512,6 +512,7 @@ const TFJS='https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/dist/tr
 const hasGpu=async()=>{try{return!!(navigator.gpu&&await navigator.gpu.requestAdapter())}catch{return false}};
 /* low-RAM safeguards: measure this tab's real memory use (Chrome, needs the isolated mode we already enable) */
 async function memUsed(){try{if(performance.measureUserAgentSpecificMemory)return(await performance.measureUserAgentSpecificMemory()).bytes}catch{}return performance.memory?performance.memory.usedJSHeapSize:0}
+async function memInfo(){let total=0,shared=0;try{if(performance.measureUserAgentSpecificMemory){const r=await performance.measureUserAgentSpecificMemory();total=r.bytes;for(const b of r.breakdown)if((b.types||[]).includes('Shared'))shared+=b.bytes}}catch{}const js=performance.memory?performance.memory.usedJSHeapSize:0;return{total:total||js,js,shared}}
 async function freeEngines(){try{GPUE&&await GPUE.dispose()}catch{}GPUE=null;try{TR&&TR.destroy()}catch{}TR=null}
 const eta=s=>s<60?'under a minute':s<3600?Math.round(s/60)+' min':Math.floor(s/3600)+' h '+Math.round(s%3600/60)+' min';
 /* GPU path: Transformers.js + Whisper (ONNX) on WebGPU. Library and model files are kept in IndexedDB too. */
@@ -619,24 +620,26 @@ function attachCaps(P){
       if(src===f)return;
     }
     let segs=null,eng=null,ok=false,gpu=await hasGpu();
-    const low=(navigator.deviceMemory||8)<=4||(navigator.hardwareConcurrency||8)<=4,lim=low?650e6:1e9;
-    if(gpu&&low){const c=await askToast(`This device has limited RAM (about ${navigator.deviceMemory||'a few'} GB). GPU captions will use a lightweight model (a little less accurate) to stay under about 650 MB, but a weak graphics chip can still struggle. Which do you want?`,['GPU, lightweight model','CPU (slower, safest)','Cancel']);if(c===2)return;if(c===1)gpu=false}
+    const low=(navigator.deviceMemory||8)<=4||(navigator.hardwareConcurrency||8)<=4,lim=low?900e6:1e9;
+    if(gpu&&low){const c=await askToast(`This device has limited RAM (about ${navigator.deviceMemory||'a few'} GB). GPU captions will use a lightweight model (a little less accurate) to stay under about 900 MB, but a weak graphics chip can still struggle. Which do you want?`,['GPU, lightweight model','CPU (slower, safest)','Cancel']);if(c===2)return;if(c===1)gpu=false}
     else if(!gpu&&await askToast(`This device has no WebGPU, so transcription runs on the CPU and can take about as long as the video itself${el.duration?' (roughly '+Math.round(el.duration/60)+' min)':''}. Continue anyway?`,['Continue','Cancel']))return;
+    const tv=el.currentTime,u0=el.currentSrc,unpark=()=>{if(u0){el.src=u0;el.addEventListener('loadedmetadata',()=>{el.currentTime=tv},{once:true})}};
+    el.pause();el.removeAttribute('src');el.load();
     await cb('Downloading captions engine (one time)…',async ui=>{
       if(gpu)try{eng=await ensureGpu(ui,low)}catch(e){console.warn('GPU captions unavailable:',e);gpu=false;askToast('GPU captions couldn’t start ('+((e&&e.message)||e)+'). Falling back to the slower CPU engine.',['OK'])}
       if(!eng){await ensureEngine(ui);const th=Math.max(1,Math.min(2,(navigator.hardwareConcurrency||2)>>1));
         eng={run:async pcm=>{TR._loadAudio=async()=>pcm;return parseCues(await TR.transcribe(new File([new Uint8Array(1)],'audio.wav'),{lang:'auto',threads:th,token_timestamps:false}))}}}
     });
-    if(!eng)return;
+    if(!eng){unpark();return}
     const t0=performance.now();
     await cb(gpu?'Transcribing on your GPU…':'Transcribing on your CPU…',async ui=>{
       segs=[];ui.prog(0,'estimating time…');
       await extractChunks(src,low?60:120,async(pcm,start,frac)=>{
-        const m=await memUsed();if(m>lim)throw Error(`Stopped to protect your device: this tab reached ${Math.round(m/1e6)} MB of RAM (limit ${Math.round(lim/1e6)} MB). Close other tabs and try again, or choose the CPU option.`);
+        const m=await memInfo(),mb=x=>Math.round(x/1e6);if(m.total>lim)throw Error(`Stopped to protect your device: this tab reached ${mb(m.total)} MB of RAM (JavaScript ${mb(m.js)} MB, threaded engine ${mb(m.shared)} MB, everything else ${mb(Math.max(0,m.total-m.js-m.shared))} MB; limit ${mb(lim)} MB). Close other tabs and try again, or choose the CPU option.`);
         (await eng.run(pcm)).forEach(c=>segs.push({a:c.a+start,b:c.b+start,t:c.t}));
         const s=(performance.now()-t0)/1000;ui.prog(frac,frac<.995?'about '+eta(s/Math.max(frac,.001)*(1-frac))+' left':'finishing…')});ok=true;
     });
-    await freeEngines();if(!ok)return;cues=chunkCues(segs);if(!cues.length)return askToast('No speech was detected in this video.'+(TRLOG.length?' Engine log: '+TRLOG.slice(-3).join(' | ').slice(0,300):''),['OK']);
+    await freeEngines();unpark();if(!ok)return;cues=chunkCues(segs);if(!cues.length)return askToast('No speech was detected in this video.'+(TRLOG.length?' Engine log: '+TRLOG.slice(-3).join(' | ').slice(0,300):''),['OK']);
     await idb.set('captions',key,{cues,name:f.name,at:Date.now()}).catch(()=>{});setOn(true);
   });
 }
