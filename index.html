@@ -432,7 +432,8 @@ $('#go').onclick=async()=>{
   const g=$('#go');converting=true;pauseJobs();g.disabled=true;$('#done').hidden=true;showWarn('');$('#prog').hidden=false;setProg(0);setStatus('Working…');
   try{
     const o=opts(),r=cat==='image'?await viaCanvas(file,ext,o):ext==='mp3'?await viaMP3(file,o):await viaMB(file,ext,cat,o,fh),w=[...r.warn];
-    blob=r.blob;if(o.on&&o.mode==='t'&&o.T&&blob.size>o.T*1.1&&!w.some(x=>/too small|Couldn’t reach/.test(x)))w.push(`The result (${fmt(blob.size)}) ended up above your ${fmt(o.T)} target.`);
+    blob=r.blob;if(cat==='video'){setStatus('Carrying captions over…');const k=await carryCaps(file,blob,fh,ext);if(k!==blob){blob=k;w.push('Captions were carried into the converted file, so OPTIC can still show them.')}}
+    if(o.on&&o.mode==='t'&&o.T&&blob.size>o.T*1.1&&!w.some(x=>/too small|Couldn’t reach/.test(x)))w.push(`The result (${fmt(blob.size)}) ended up above your ${fmt(o.T)} target.`);
     showWarn(w);showResult(!!fh);
   }catch(e){console.error(e);const x=$('#warn');x.hidden=false;x.className='note err';x.textContent=why(e)}
   converting=false;releaseJobs();g.disabled=false;$('#prog').hidden=true;setStatus('');
@@ -507,7 +508,8 @@ async function prev1(f,ext,kind,o){
 /* ---------- captions (Transcribe.js / whisper, kept in IndexedDB) ---------- */
 const idb=(()=>{let p;const db=()=>p||(p=new Promise((ok,no)=>{const r=indexedDB.open('optic',1);r.onupgradeneeded=()=>{r.result.createObjectStore('assets');r.result.createObjectStore('captions')};r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)}));
   const tx=async(s,m,fn)=>{const d=await db();return new Promise((ok,no)=>{const t=d.transaction(s,m),q=fn(t.objectStore(s));t.oncomplete=()=>ok(q&&q.result);t.onerror=()=>no(t.error)})};
-  return{get:(s,k)=>tx(s,'readonly',o=>o.get(k)),set:(s,k,v)=>tx(s,'readwrite',o=>o.put(v,k))}})();
+  return{get:(s,k)=>tx(s,'readonly',o=>o.get(k)),set:(s,k,v)=>tx(s,'readwrite',o=>o.put(v,k)),del:(s,k)=>tx(s,'readwrite',o=>o.delete(k)),
+    entries:async s=>{const d=await db();return new Promise((ok,no)=>{const out=[],r=d.transaction(s).objectStore(s).openCursor();r.onsuccess=()=>{const c=r.result;if(c){out.push([c.key,c.value]);c.continue()}else ok(out)};r.onerror=()=>no(r.error)})}}})();
 const TLIB='https://cdn.jsdelivr.net/npm/@transcribe/transcriber@3.0.1/+esm',TSHOUT='https://cdn.jsdelivr.net/npm/@transcribe/shout/src/shout/shout.wasm.js',TMODEL='https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin';
 function askToast(msg,btns){return new Promise(ok=>{const t=document.createElement('div');t.className='toast';t.innerHTML='<p></p><div></div>';t.firstChild.textContent=msg;
   btns.forEach((b,i)=>{const e=document.createElement('button');e.textContent=b;if(!i)e.className='pri';e.onclick=()=>{t.remove();ok(i)};t.lastChild.append(e)});let box=document.querySelector('.toasts');if(!box){box=document.createElement('div');box.className='toasts'}(document.fullscreenElement||document.body).append(box);box.append(t)})}
@@ -582,6 +584,86 @@ function chunkCues(segs){
   out.forEach((c,i)=>{if(c.b-c.a<1)c.b=Math.min(c.a+1,i<out.length-1?out[i+1].a:1e9)});
   return out;
 }
+/* Captions live inside the .mp4 itself as one extra top-level "uuid" box at the end of the file. Players skip unknown boxes, so the video plays everywhere as before. */
+const CAPUUID=[...'OPTIC-CAPTIONS-1'].map(c=>c.charCodeAt(0));
+async function scanMp4(f){
+  let pos=0,n=0,start=null,payload=null,unsafe=false;
+  while(pos+8<=f.size&&n++<2000){
+    const b=new DataView(await f.slice(pos,pos+32).arrayBuffer());if(b.byteLength<8)break;
+    let sz=b.getUint32(0),hd=8;const type=String.fromCharCode(b.getUint8(4),b.getUint8(5),b.getUint8(6),b.getUint8(7));
+    if(sz===1){if(b.byteLength<16)break;sz=Number(b.getBigUint64(8));hd=16}else if(sz===0){sz=f.size-pos;if(type==='mdat')unsafe=true}
+    if(sz<hd||pos+sz>f.size)break;
+    if(type==='uuid'&&b.byteLength>=hd+16&&CAPUUID.every((c,i)=>b.getUint8(hd+i)===c)){start=pos;payload=[pos+hd+16,pos+sz]}
+    pos+=sz;
+  }
+  return{start,payload,unsafe};
+}
+async function readMp4Caps(f){const s=await scanMp4(f);if(!s.payload)return null;try{const j=JSON.parse(await f.slice(s.payload[0],s.payload[1]).text());return Array.isArray(j.cues)&&j.cues.length?j.cues:null}catch{return null}}
+function capsBox(cues){
+  const json=new TextEncoder().encode(JSON.stringify({v:1,at:Date.now(),cues:cues.map(c=>({a:+c.a.toFixed(2),b:+c.b.toFixed(2),t:c.t}))})),u=new Uint8Array(24+json.length);
+  new DataView(u.buffer).setUint32(0,u.length);u.set([117,117,105,100],4);u.set(CAPUUID,8);u.set(json,24);return u;
+}
+/* Matroska / WebM: one extra Tags element (SimpleTag OPTIC_CAPTIONS) at the end of the Segment, which players ignore */
+const rid=(b,o)=>{const x=b.getUint8(o);let n=1;while(n<=4&&!(x&(0x100>>n)))n++;if(n>4)return null;let id=0;for(let k=0;k<n;k++)id=id*256+b.getUint8(o+k);return{len:n,id}};
+const rsz=(b,o)=>{const x=b.getUint8(o);let n=1;while(n<=8&&!(x&(0x100>>n)))n++;if(n>8)return null;const m=(0x100>>n)-1;let v=x&m,all=v===m;for(let k=1;k<n;k++){const y=b.getUint8(o+k);v=v*256+y;if(y!==255)all=false}return{len:n,val:v,unk:all}};
+const catU=(...a)=>{const u=new Uint8Array(a.reduce((n,x)=>n+x.length,0));let p=0;for(const x of a){u.set(x,p);p+=x.length}return u};
+const ebml=(id,pl)=>{const u=new Uint8Array(id.length+8+pl.length);u.set(id);u[id.length]=1;new DataView(u.buffer).setUint32(id.length+4,pl.length);u.set(pl,id.length+8);return u};
+function mkvTags(cues){
+  const te=new TextEncoder(),json=te.encode(JSON.stringify({v:1,at:Date.now(),cues:cues.map(c=>({a:+c.a.toFixed(2),b:+c.b.toFixed(2),t:c.t}))}));
+  const st=ebml([0x67,0xC8],catU(ebml([0x45,0xA3],te.encode('OPTIC_CAPTIONS')),ebml([0x44,0x87],json)));
+  return ebml([0x12,0x54,0xC3,0x67],ebml([0x73,0x73],catU(ebml([0x63,0xC0],new Uint8Array(0)),st)));
+}
+function findMkvCaps(t){
+  const nm=[...'OPTIC_CAPTIONS'].map(c=>c.charCodeAt(0)),dv=new DataView(t.buffer,t.byteOffset,t.length);
+  outer:for(let i=0;i+nm.length+12<t.length;i++){for(let k=0;k<nm.length;k++)if(t[i+k]!==nm[k])continue outer;
+    const o=i+nm.length;if(t[o]!==0x44||t[o+1]!==0x87)continue;const s=rsz(dv,o+2);if(!s)continue;const a=o+2+s.len;return t.slice(a,a+s.val)}
+  return null;
+}
+async function mkvScan(f){
+  const H=async(p)=>new DataView(await f.slice(p,p+16).arrayBuffer());let p=0,seg=null;
+  for(let n=0;n<4&&p+12<=f.size;n++){const b=await H(p),i=rid(b,0);if(!i)return null;const s=rsz(b,i.len);if(!s)return null;
+    if(i.id===0x18538067){seg={sizePos:p+i.len,sizeLen:s.len,sd:p+i.len+s.len,unk:s.unk,size:s.val};break}p+=i.len+s.len+s.val}
+  if(!seg||(!seg.unk&&seg.sd+seg.size!==f.size))return null;
+  let q=seg.sd,start=null,payload=null;
+  while(q+4<f.size){const b=await H(q),i=rid(b,0),s=i&&rsz(b,i.len);if(!s||s.unk)break;const ds=q+i.len+s.len,de=ds+s.val;if(de>f.size)break;
+    if(i.id===0x1254C367&&s.val<2e7){const j=findMkvCaps(new Uint8Array(await f.slice(ds,de).arrayBuffer()));if(j){start=q;payload=j}}q=de}
+  return{seg,start,payload,end:q};
+}
+async function readCaps(f,label){
+  try{let raw=null;
+    if(label==='WebM/MKV'){const s=await mkvScan(f);raw=s&&s.payload&&new TextDecoder().decode(s.payload)}
+    else{const s=await scanMp4(f);raw=s.payload&&await f.slice(s.payload[0],s.payload[1]).text()}
+    const j=raw&&JSON.parse(raw);return j&&Array.isArray(j.cues)&&j.cues.length?j.cues:null}catch{return null}
+}
+async function planCaps(f,cues){
+  const[,l]=await sniff(f);
+  if(l==='MP4'||l==='MOV'){const s=await scanMp4(f);
+    if(s.unsafe)throw Error('This MP4 can’t be extended in place because its media block runs to the end of the file. Convert it with OPTIC first, then try again.');
+    return{cut:s.start!=null&&s.payload[1]===f.size?s.start:f.size,patches:[],append:capsBox(cues)}}
+  if(l==='WebM/MKV'){const s=await mkvScan(f);if(!s)throw Error('This MKV/WebM file’s layout isn’t supported for storing captions in place.');
+    const cut=s.start!=null&&s.end===f.size?s.start:f.size,app=mkvTags(cues),patches=[];
+    if(!s.seg.unk){const L=s.seg.sizeLen;let v=cut+app.length-s.seg.sd;if(v>=2**(7*L)-1)throw Error('Segment too large to extend in place.');const sz=new Uint8Array(L);for(let k=L-1;k>=0;k--){sz[k]=v%256;v=Math.floor(v/256)}sz[0]|=0x80>>(L-1);patches.push({pos:s.seg.sizePos,data:sz})}
+    return{cut,patches,append:app}}
+  throw Error('Captions can be stored inside MP4, MOV, MKV and WebM files.');
+}
+function applyPlan(f,pl){const parts=[];let p=0;for(const q of[...pl.patches].sort((a,b)=>a.pos-b.pos)){if(q.pos>=pl.cut)continue;parts.push(f.slice(p,q.pos),q.data);p=q.pos+q.data.length}parts.push(f.slice(p,pl.cut),pl.append);return new Blob(parts,{type:f.type||'video/mp4'})}
+async function embedCaps(f,cues,h){
+  const pl=await planCaps(f,cues);
+  if(!h&&f.name&&'showOpenFilePicker'in window){[h]=await showOpenFilePicker({id:'convertify'});const g=await h.getFile();if(g.name!==f.name||g.size!==f.size)throw Error('That isn’t the same file. Pick the original video.')}
+  if(h){if(h.requestPermission&&await h.requestPermission({mode:'readwrite'})!=='granted')throw Error('Permission to modify the file was denied.');
+    const wr=await h.createWritable({keepExistingData:true});await wr.truncate(pl.cut);for(const q of pl.patches)await wr.write({type:'write',position:q.pos,data:q.data});await wr.write({type:'write',position:pl.cut,data:pl.append});await wr.close();return}
+  const a=document.createElement('a');a.href=URL.createObjectURL(applyPlan(f,pl));a.download=(f.name||'video.mp4').replace(/(\.[^.]*)?$/,' (captions)$1');a.click();setTimeout(()=>URL.revokeObjectURL(a.href),6e4);
+}
+/* captions of a source file (inside it, or in browser storage); carried into the converted file so they survive a format change */
+async function capsOf(f){
+  try{const[,l]=await sniff(f);if(['MP4','MOV','WebM/MKV'].includes(l)){const c=await readCaps(f,l);if(c)return c}
+    if(f.name){const r=(await idb.entries('captions')).filter(([,v])=>v&&v.name===f.name&&v.cues).sort((a,b)=>b[1].at-a[1].at);if(r.length)return r[0][1].cues}}catch{}
+  return null;
+}
+async function carryCaps(src,out,fh,ext){
+  if(!['mp4','mov','mkv','webm'].includes(ext))return out;const cues=await capsOf(src);if(!cues)return out;
+  try{if(fh){await embedCaps(out,cues,fh);return await fh.getFile()}return applyPlan(out,await planCaps(out,cues))}catch(e){console.warn('Couldn’t carry captions over:',e);return out}
+}
 const CK='cv-cap2',CDEF={size:4.4,color:'#ffffff',bg:0,edge:'shadow',font:'sans',bold:1,x:50,y:84};
 function attachCaps(P){
   const{w,el,f,o,set,bar,ov}=P,key=`${f.name}|${f.size}|${f.lastModified}`,btn=bar.querySelector('[data-a=cc]'),gear=bar.querySelector('[data-a=cs]');
@@ -609,27 +691,32 @@ function attachCaps(P){
   cap.onpointermove=e=>{if(!cap.off)return;const r=w.getBoundingClientRect();let x=(e.clientX-cap.off[0]-r.left)/r.width*100,y=(e.clientY-cap.off[1]-r.top)/r.height*100;x=Math.min(98,Math.max(2,x));y=Math.min(98,Math.max(8,y));
     if(Math.hypot((x-CDEF.x)/100*r.width,(y-CDEF.y)/100*r.height)<40){x=CDEF.x;y=CDEF.y}C.x=x;C.y=y;apply()};
   cap.onpointerup=()=>{cap.off=null;save()};
+  const persistCaps=async(tg,lab)=>{
+    const keep=()=>idb.set('captions',key,{cues,name:f.name,at:Date.now()}).catch(()=>{});
+    if(!tg){await keep();return askToast(`${lab||'This'} videos can’t hold captions inside the file, so they’re kept in OPTIC’s browser storage (it can be cleared). Convert the video to MP4, MOV, MKV or WebM with OPTIC and the captions are carried into the converted file.`,['OK'])}
+    if(await askToast('Captions are ready. Save them inside the video file? They then travel with the file and survive clearing browser data. The video keeps working in every player.',['Save into the file','Keep in browser storage only'])===0)
+      try{await embedCaps(tg.f,cues,tg.h);return askToast('Captions are now stored inside the .mp4 file.',['OK'])}catch(er){if(er.name!=='AbortError')askToast(why(er)+' The captions are kept in browser storage instead.',['OK'])}
+    await keep();
+  };
+  const migrate=async recs=>{
+    if(await askToast('Found captions for this video stored in OPTIC’s browser storage, which is unreliable: clearing the site’s data deletes it. OPTIC is shifting them into the .mp4 file itself, which is reliable and goes with the file, so clearing the cache won’t remove them. The video keeps working everywhere else.',['Shift captions into the .mp4','Not now']))return;
+    try{await embedCaps(f,recs[0][1].cues,o.handle);for(const[k]of recs)await idb.del('captions',k).catch(()=>{});askToast('Done. The captions now live inside the .mp4 file.',['OK'])}
+    catch(er){if(er.name!=='AbortError')askToast(why(er)+' Your captions stay in browser storage for now.',['OK'])}
+  };
+  const initP=(async()=>{try{
+    const[,l0]=await sniff(f),isM=['MP4','MOV','WebM/MKV'].includes(l0);
+    if(isM){const em=await readCaps(f,l0);if(em){cues=em;return}}
+    const recs=(await idb.entries('captions')).filter(([,v])=>v&&v.name===f.name&&v.cues).sort((a,b)=>b[1].at-a[1].at);
+    if(recs.length){cues=recs[0][1].cues;if(isM)migrate(recs)}
+  }catch(e){console.warn('Caption lookup failed',e)}})();
   const cb=mkBusy(w,ov,e=>askToast(/memory|alloc|RangeError/i.test((e&&e.name)+' '+(e&&e.message))?'Your device ran out of memory while generating captions. Close other tabs and apps and try again. OPTIC already works through the video in 5-minute pieces, so if this keeps happening the speech engine itself is too heavy for this device.':why(e),['OK']));
   bar.addEventListener('click',async e=>{
     const b=e.target.closest('[data-a]'),a=b&&b.dataset.a;if(a==='cs')return void(cs.hidden=!cs.hidden);if(a!=='cc')return;
-    if(cues)return setOn(!on);
-    const saved=await idb.get('captions',key).catch(()=>null);if(saved){cues=saved.cues;return setOn(true)}
+    await initP;if(cues)return setOn(!on);
     if(await askToast('Captions are generated ahead of time, not live. OPTIC will download the transcription engine and speech model once (roughly 60–130 MB, kept on this device), then transcribe the whole video before captions appear. Load captions?',['Load captions','Not now']))return;
     el.pause();
-    let src=f;const[,lab]=await sniff(f);
-    if(!(lab==='MP4'&&/\.mp4$/i.test(f.name))){
-      const c=await askToast(`Captions need a valid .mp4 file, and this one is ${lab==='MP4'?'named differently':'a '+lab+' file'}. Convert it first. What should happen to the converted file?`,['Replace the original','Save as a new .mp4','Just preview it (save nothing)','Cancel']);
-      if(c===3)return;
-      await cb('Converting to MP4…',async ui=>{
-        if(c===2){src=await prev(f,'mp4','video',{on:false},ui);const t0=el.currentTime,pl=!el.paused;el.addEventListener('loadeddata',()=>{el.currentTime=t0;if(pl)el.play()},{once:true});set(src)}
-        else if(c===1){const fh='showSaveFilePicker'in window?await showSaveFilePicker({suggestedName:f.name.replace(/\.[^.]*$/,'')+'.mp4',id:'convertify',types:[{accept:{'video/mp4':['.mp4']}}]}):null,r=await viaMB(f,'mp4','video',{on:false,job:{ui}},fh);src=r.blob;
-          if(!fh){const a=document.createElement('a');a.href=URL.createObjectURL(src);a.download=f.name.replace(/\.[^.]*$/,'')+'.mp4';a.click()}}
-        else{let h=o.handle;if(!h){[h]=await showOpenFilePicker({id:'convertify'});const g=await h.getFile();if(g.name!==f.name||g.size!==f.size)throw Error('That isn’t the same file. Pick the original video to replace it.')}
-          if(h.requestPermission&&await h.requestPermission({mode:'readwrite'})!=='granted')throw Error('Permission to modify the original file was denied.');
-          src=(await viaMB(f,'mp4','video',{on:false,job:{ui}},h)).blob;if(!/\.mp4$/i.test(f.name))askToast('Done. The file keeps its old name, so rename it to .mp4 to finish.',['OK'])}
-      });
-      if(src===f)return;
-    }
+    /* any video the browser can decode works: only the audio is read, so no conversion is needed */
+    const src=f,[,lab]=await sniff(f),tgt=['MP4','MOV','WebM/MKV'].includes(lab)?{f,h:o.handle}:null;
     let segs=null,eng=null,ok=false,gpu=await hasGpu();
     const low=(navigator.deviceMemory||8)<=4||(navigator.hardwareConcurrency||8)<=4,lim=low?900e6:1e9;
     if(gpu&&low){const c=await askToast(`This device has limited RAM (about ${navigator.deviceMemory||'a few'} GB). GPU captions will use a lightweight model (a little less accurate) to stay under about 900 MB, but a weak graphics chip can still struggle. Which do you want?`,['GPU, lightweight model','CPU (slower, safest)','Cancel']);if(c===2)return;if(c===1)gpu=false}
@@ -651,7 +738,7 @@ function attachCaps(P){
         const s=(performance.now()-t0)/1000;ui.prog(frac,frac<.995?'about '+eta(s/Math.max(frac,.001)*(1-frac))+' left':'finishing…')});ok=true;
     });
     await freeEngines();unpark();if(!ok)return;cues=chunkCues(segs);if(!cues.length)return askToast('No speech was detected in this video.'+(TRLOG.length?' Engine log: '+TRLOG.slice(-3).join(' | ').slice(0,300):''),['OK']);
-    await idb.set('captions',key,{cues,name:f.name,at:Date.now()}).catch(()=>{});setOn(true);
+    setOn(true);await persistCaps(tgt,lab);
   });
 }
 function mkPlayer(f,kind,o={}){
