@@ -718,7 +718,7 @@ function attachCaps(P){
     /* any video the browser can decode works: only the audio is read, so no conversion is needed */
     const src=f,[,lab]=await sniff(f),tgt=['MP4','MOV','WebM/MKV'].includes(lab)?{f,h:o.handle}:null;
     let segs=null,eng=null,ok=false,gpu=await hasGpu();
-    const low=(navigator.deviceMemory||8)<=4||(navigator.hardwareConcurrency||8)<=4,lim=low?900e6:1e9;
+    const low=(navigator.deviceMemory||8)<=4||(navigator.hardwareConcurrency||8)<=4,lim=low?900e6:2e9;
     if(gpu&&low){const c=await askToast(`This device has limited RAM (about ${navigator.deviceMemory||'a few'} GB). GPU captions will use a lightweight model (a little less accurate) to stay under about 900 MB, but a weak graphics chip can still struggle. Which do you want?`,['GPU, lightweight model','CPU (slower, safest)','Cancel']);if(c===2)return;if(c===1)gpu=false}
     else if(!gpu&&await askToast(`This device has no WebGPU, so transcription runs on the CPU and can take about as long as the video itself${el.duration?' (roughly '+Math.round(el.duration/60)+' min)':''}. Continue anyway?`,['Continue','Cancel']))return;
     const tv=el.currentTime,u0=el.currentSrc,unpark=()=>{if(u0){el.src=u0;el.addEventListener('loadedmetadata',()=>{el.currentTime=tv},{once:true})}};
