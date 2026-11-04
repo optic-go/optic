@@ -830,7 +830,6 @@ function mkPlayer(f,kind,o={}){
   sk.oninput=()=>{sk.drag=1;el.currentTime=sk.value/1000*el.duration};sk.onchange=()=>sk.drag=0;
   el.onvolumechange=()=>{q('[data-a=m]').innerHTML=svg(el.muted||!el.volume?'mute':'vol')};
   q('.vl').oninput=e=>{el.volume=+e.target.value;el.muted=false};
-  q('.mc').onchange=e=>{mono=e.target.value==='m'?1:0;setMix()};
   q('.sp').onchange=e=>{const to=+e.target.value,from=el.playbackRate,t0=performance.now(),s=n=>{const k=Math.min(1,(n-t0)/500);el.playbackRate=from+(to-from)*k*k*(3-2*k);if(k<1)raf=requestAnimationFrame(s)};cancelAnimationFrame(raf);raf=requestAnimationFrame(s)};
   bar.onclick=e=>{const b=e.target.closest('[data-a]'),a=b&&b.dataset.a;if(!a)return;
     if(a==='p')el.paused?el.play():el.pause();
@@ -1030,6 +1029,7 @@ function mkAudio(fs,o={}){
   el.onpause=()=>{upd();cancelAnimationFrame(raf);loop()};el.ontimeupdate=el.ondurationchange=el.onseeked=()=>{if(el.paused)draw()};
   el.onvolumechange=()=>{q('[data-a=m]').innerHTML=svg(el.muted||!el.volume?'mute':'vol')};
   q('.vl').oninput=e=>{el.volume=+e.target.value;el.muted=false};
+  q('.mc').onchange=e=>{mono=e.target.value==='m'?1:0;setMix()};
   q('.sp').onchange=e=>{const to=+e.target.value,from=el.playbackRate,t0=performance.now(),s=n=>{const k=Math.min(1,(n-t0)/500);el.playbackRate=from+(to-from)*k*k*(3-2*k);if(k<1)raf2=requestAnimationFrame(s)};cancelAnimationFrame(raf2);raf2=requestAnimationFrame(s)};let raf2;
   const seek=e=>{const r=cv.getBoundingClientRect();if(el.duration)el.currentTime=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width))*el.duration};
   cv.onpointerdown=e=>{cv.setPointerCapture(e.pointerId);cv.sk=1;seek(e)};cv.onpointermove=e=>cv.sk&&seek(e);cv.onpointerup=()=>cv.sk=0;
