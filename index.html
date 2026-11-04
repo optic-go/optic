@@ -160,6 +160,9 @@ select:focus,input:focus-visible,button:focus-visible{outline:2px solid var(--in
 .ae button{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:9px;padding:7px 13px;font-size:13.5px}
 .ae button.pri{background:var(--ink);color:var(--on);border-color:var(--ink)}
 .aeb{display:flex;gap:8px;flex-wrap:wrap}
+.cbar{position:relative;height:3px;margin:-2px 44px 0;border-radius:2px;background:#fff2}
+.cbar i{position:absolute;top:0;bottom:0;background:#c8c8c8;border-radius:2px}
+.cstat{position:absolute;left:12px;top:12px;z-index:3;padding:4px 11px;border-radius:999px;background:#000a;color:#fff;font-size:12px;pointer-events:none}
 #orig{margin-top:28px}
 .oi{display:block;max-width:100%;max-height:70vh;margin:auto;border-radius:10px;border:1px solid var(--line)}
 body.viewer{padding:0;display:block}
@@ -244,7 +247,7 @@ async function load(f){
   reset();const[c,l]=await sniff(f);
   if(!c){return flash('That file type isn’t supported. Try an image, audio or video file.')}
   file=f;cat=c;label=l;$('#drop').hidden=true;$('#work').hidden=false;
-  $('#fname').textContent=f.name;$('#fmeta').textContent=`${fmt(f.size)} · ${l} ${c}`;
+  $('#fname').textContent=f.name;document.title=f.name+' · OPTIC';$('#fmeta').textContent=`${fmt(f.size)} · ${l} ${c}`;
   const e=(f.name.split('.').pop()||'').toLowerCase(),n={jpg:'jpeg',tif:'tiff',mkv:'webm/mkv',webm:'webm/mkv',oga:'ogg',m4v:'mp4',qt:'mov'}[e]||e,mm=$('#mismatch');
   mm.hidden=l.toLowerCase().includes(n)||!f.name.includes('.');
   mm.textContent=`This file is named .${e} but its contents are ${l}. Convertify goes by the contents, so converting will produce a genuine file.`;
@@ -257,7 +260,7 @@ function flash(m){const w=$('#warn');w.hidden=false;w.className='note err';w.tex
 function reset(){blob=null;sweep();$('#orig').hidden=true;$('#origp').replaceChildren();$('#done').hidden=true;$('#warn').hidden=true;$('#warn').className='note warn';$('#work').append($('#warn'));$('#work').insertBefore($('#warn'),$('#go'));$('#status').textContent='';$('#prog').hidden=true}
 async function intake(fs){fs=[...fs];if(fs.length>1){const s=await Promise.all(fs.map(sniff)),au=fs.filter((_,i)=>s[i][0]==='audio');if(au.length>1)return openViewer(au,{closable:1})}fs[0]&&load(fs[0])}
 $('#file').onchange=e=>intake(e.target.files);
-$('#clear').onclick=()=>{reset();file=null;$('#file').value='';$('#work').hidden=true;$('#drop').hidden=false};
+$('#clear').onclick=()=>{document.title='OPTIC';reset();file=null;$('#file').value='';$('#work').hidden=true;$('#drop').hidden=false};
 const dz=$('#drop');
 ['dragenter','dragover'].forEach(t=>addEventListener(t,e=>{e.preventDefault();dz.classList.add('over')}));
 ['dragleave','drop'].forEach(t=>addEventListener(t,e=>{e.preventDefault();dz.classList.remove('over')}));
@@ -526,20 +529,76 @@ const hasGpu=async()=>{try{return!!(navigator.gpu&&await navigator.gpu.requestAd
 /* low-RAM safeguards: measure this tab's real memory use (Chrome, needs the isolated mode we already enable) */
 async function memUsed(){try{if(performance.measureUserAgentSpecificMemory)return(await performance.measureUserAgentSpecificMemory()).bytes}catch{}return performance.memory?performance.memory.usedJSHeapSize:0}
 async function memInfo(){let total=0,shared=0;try{if(performance.measureUserAgentSpecificMemory){const r=await performance.measureUserAgentSpecificMemory();total=r.bytes;for(const b of r.breakdown)if((b.types||[]).includes('Shared'))shared+=b.bytes}}catch{}const js=performance.memory?performance.memory.usedJSHeapSize:0;return{total:total||js,js,shared}}
-async function freeEngines(){try{GPUE&&await GPUE.dispose()}catch{}GPUE=null;try{TR&&TR.destroy()}catch{}TR=null}
+async function freeEngines(){try{GPUE&&await GPUE.dispose()}catch{}GPUE=null;try{VAD&&await VAD.model.dispose()}catch{}VAD=null;try{TR&&TR.destroy()}catch{}TR=null}
 const eta=s=>s<60?'under a minute':s<3600?Math.round(s/60)+' min':Math.floor(s/3600)+' h '+Math.round(s%3600/60)+' min';
 /* GPU path: Transformers.js + Whisper (ONNX) on WebGPU. Library and model files are kept in IndexedDB too. */
-async function ensureGpu(ui,low){
-  if(GPUE)return GPUE;
+let TFM,VAD;
+async function getTf(ui){
+  if(TFM)return TFM;
   if(!navigator.serviceWorker||!navigator.serviceWorker.controller)throw Error('Offline app mode isn’t active yet. Reload the page once (a normal reload) and try again.');
-  await getAsset('tfjs-lib',TFJS,'text/javascript',ui,'GPU captions library');
+  await getAsset('tfjs-lib',TFJS,'text/javascript',ui,'captions library');
   const T=await import(new URL('_opt/transformers.js',document.baseURI).href),env=T.env;
   env.allowLocalModels=false;try{env.backends.onnx.wasm.numThreads=1;env.backends.onnx.wasm.proxy=false}catch{}env.useBrowserCache=false;env.useCustomCache=true;
   env.customCache={match:async k=>{const r=await idb.get('assets','tf:'+k).catch(()=>null);return r?new Response(r.b,{headers:{'Content-Type':r.t}}):undefined},
     put:async(k,res)=>{const b=await res.blob();await idb.set('assets','tf:'+k,{b,t:res.headers.get('Content-Type')||'application/octet-stream'})}};
-  const asr=await T.pipeline('automatic-speech-recognition',low?'onnx-community/whisper-tiny':'onnx-community/whisper-base',{device:'webgpu',dtype:{encoder_model:'fp32',decoder_model_merged:'q4'},progress_callback:d=>{if(d.status==='progress'&&d.progress!=null)ui.prog(d.progress/100)}});
+  return TFM=T;
+}
+async function ensureGpu(ui,low){
+  if(GPUE)return GPUE;
+  const T=await getTf(ui),asr=await T.pipeline('automatic-speech-recognition',low?'onnx-community/whisper-tiny':'onnx-community/whisper-base',{device:'webgpu',dtype:{encoder_model:'fp32',decoder_model_merged:'q4'},progress_callback:d=>{if(d.status==='progress'&&d.progress!=null)ui.prog(d.progress/100)}});
   return GPUE={dispose:()=>asr.dispose(),run:async pcm=>{const o=await asr(pcm,{chunk_length_s:30,stride_length_s:5,return_timestamps:true,task:'transcribe'});
     return(o.chunks||[]).map(c=>({a:c.timestamp[0],b:c.timestamp[1]==null?c.timestamp[0]+2:c.timestamp[1],t:(c.text||'').trim()})).filter(x=>x.t)}};
+}
+/* Silero VAD (ONNX, runs on the CPU): finds where people are actually speaking so Whisper only sees speech */
+async function ensureVad(ui){
+  if(VAD)return VAD;
+  const T=await getTf(ui),model=await T.AutoModel.from_pretrained('onnx-community/silero-vad',{config:{model_type:'custom'},dtype:'fp32',device:'wasm',progress_callback:d=>{if(d.status==='progress'&&d.progress!=null)ui.prog(d.progress/100)}});
+  return VAD={T,model,sr:new T.Tensor('int64',BigInt64Array.from([16000n]),[])};
+}
+async function vadRegions(pcm){
+  const{T,model,sr}=VAD,W=512,n=Math.floor(pcm.length/W),pr=new Float32Array(n),dt=W/16000;
+  let state=new T.Tensor('float32',new Float32Array(256),[2,1,128]);
+  for(let i=0;i<n;i++){const o=await model({input:new T.Tensor('float32',pcm.slice(i*W,(i+1)*W),[1,W]),sr,state});state=o.stateN;pr[i]=o.output.data[0]}
+  const minS=Math.ceil(.25/dt),minG=Math.ceil(.35/dt),reg=[];let on=false,s=0,last=0;
+  for(let i=0;i<n;i++){const p=pr[i];if(!on&&p>=.5){on=true;s=i;last=i}else if(on){if(p>=.35)last=i;else if(i-last>=minG){if(last-s+1>=minS)reg.push([s,last+1]);on=false}}}
+  if(on&&last-s+1>=minS)reg.push([s,last+1]);
+  const out=[],dur=pcm.length/16000;
+  for(const[a,b]of reg){const x=Math.max(0,a*dt-.15),y=Math.min(dur,b*dt+.15),l=out[out.length-1];if(l&&x-l.e<.3){l.e=y;l.b=b}else out.push({s:x,e:y,a,b})}
+  for(const r of out){let sp=0;for(let i=r.a;i<r.b;i++)sp+=pr[i];r.pm=sp/Math.max(1,r.b-r.a);const i0=Math.floor(r.s*16000),i1=Math.floor(r.e*16000);let sq=0;for(let i=i0;i<i1;i++)sq+=pcm[i]*pcm[i];r.rms=Math.sqrt(sq/Math.max(1,i1-i0))}
+  return out;
+}
+/* join speech regions into <=28 s windows (Whisper's window size) so it never wastes time on silence, then map timestamps back */
+function packRegions(pcm,regs){
+  const groups=[],gap=4000;let g=null;
+  for(const r of regs)for(let s=r.s;s<r.e-.01;s+=28){const e=Math.min(r.e,s+28),len=Math.round((e-s)*16000);
+    if(!g||g.n+gap+len>28*16000){g={parts:[],map:[],n:0};groups.push(g)}
+    const p0=g.n?g.n+gap:0;g.parts.push({p0,s:Math.round(s*16000),len});g.map.push({p0:p0/16000,p1:(p0+len)/16000,o0:s,r});g.n=p0+len}
+  for(const x of groups){x.pcm=new Float32Array(x.n);for(const q of x.parts)x.pcm.set(pcm.subarray(q.s,q.s+q.len),q.p0)}
+  return groups;
+}
+const unmap=(g,t)=>{const m=g.map.find(m=>t<=m.p1+.125)||g.map[g.map.length-1];return m.o0+Math.max(0,Math.min(t-m.p0,m.p1-m.p0))};
+async function processUnit(eng,rd,t0,t1,rmsList){
+  const pcm=await rd.read(t0,t1);if(pcm.length<8000)return[];
+  const regs=await vadRegions(pcm),out=[];regs.forEach(r=>rmsList.push(r.rms));if(rmsList.length>400)rmsList.splice(0,rmsList.length-400);
+  for(const g of packRegions(pcm,regs)){
+    const cs=(await eng.run(g.pcm)).filter(c=>c.t&&!/^[\W_]*$/.test(c.t)&&!/^[\[(]\s*(blank[_ ]audio|silence|music|inaudible)\s*[\])]$/i.test(c.t)&&!/^(.{1,14}?)(\s*\1){3,}$/i.test(c.t)),cov=g.map.map(()=>0);
+    for(const c of cs){out.push({a:t0+unmap(g,c.a),b:t0+unmap(g,Math.max(c.b,c.a+.3)),t:c.t});g.map.forEach((m,i)=>{cov[i]+=Math.max(0,Math.min(c.b,m.p1)-Math.max(c.a,m.p0))})}
+    /* speech was detected but Whisper produced (almost) nothing: label it instead of leaving a silent gap */
+    g.map.forEach((m,i)=>{const len=m.p1-m.p0;if(len>=.9&&cov[i]/len<.4){const med=[...rmsList].sort((x,y)=>x-y)[rmsList.length>>1]||m.r.rms;
+      out.push({a:t0+m.o0,b:t0+m.o0+len,t:m.r.pm>.88&&m.r.rms>med*1.15?'[Overlapping Chatter]':'[Unintelligible]',label:1})}});
+  }
+  return out.sort((x,y)=>x.a-y.a);
+}
+async function makeReader(src){
+  const M=await loadMB(),input=new M.Input({source:new M.BlobSource(src),formats:M.ALL_FORMATS}),tk=await input.getPrimaryAudioTrack();
+  if(!tk)throw Error('This video has no audio track to caption.');
+  if(!(await tk.canDecode()))throw Error('Your browser can’t decode this video’s audio codec, so captions can’t be generated.');
+  const dur=await input.computeDuration(),sink=new M.AudioBufferSink(tk);
+  return{dur,read:async(t0,t1)=>{const out=new Float32Array(Math.ceil((t1-t0)*16000)+16384);let n=0,acc=0,cnt=0,idx=0,next=0,r=0,first=true;
+    for await(const{buffer,timestamp}of sink.buffers(t0,t1)){const sr=buffer.sampleRate,ch=buffer.numberOfChannels,L=buffer.length,d=[];for(let c=0;c<ch;c++)d.push(buffer.getChannelData(c));
+      let i0=0;if(first){first=false;r=sr/16000;next=r;i0=Math.max(0,Math.round((t0-timestamp)*sr))}
+      for(let i=i0;i<L;i++){let v=0;for(let c=0;c<ch;c++)v+=d[c][i];acc+=v/ch;cnt++;idx++;if(idx>=next){if(n<out.length)out[n++]=acc/cnt;acc=0;cnt=0;next+=r}}}
+    return out.slice(0,n)}};
 }
 async function ensureEngine(ui){
   if(TR)return TR;
@@ -576,7 +635,7 @@ function parseCues(res){
 /* one subtitle per statement (max 2 lines x 42 characters), timed by its share of the spoken segment, like a streaming service */
 function chunkCues(segs){
   const out=[];
-  for(const s of segs){const txt=s.t.replace(/\[[^\]]*\]|\([^)]*\)/g,'').replace(/\s+/g,' ').trim();if(!txt)continue;
+  for(const s of segs){const txt=(s.label?s.t:s.t.replace(/\[[^\]]*\]|\([^)]*\)/g,'')).replace(/\s+/g,' ').trim();if(!txt)continue;
     const pcs=[];for(const part of txt.match(/[^.!?…]+[.!?…]+["')\]]*\s*|[^.!?…]+$/g)||[txt]){let q=part.trim();
       while(q.length>84){let k=q.lastIndexOf(',',84);if(k<30)k=q.lastIndexOf(' ',84);if(k<20)k=84;pcs.push(q.slice(0,k+(q[k]===','?1:0)).trim());q=q.slice(k+1).trim()}if(q)pcs.push(q)}
     const tot=pcs.reduce((n,x)=>n+x.length,0),dur=Math.max(.5,s.b-s.a);let t0=s.a;
@@ -709,36 +768,53 @@ function attachCaps(P){
     const recs=(await idb.entries('captions')).filter(([,v])=>v&&v.name===f.name&&v.cues).sort((a,b)=>b[1].at-a[1].at);
     if(recs.length){cues=recs[0][1].cues;if(isM)migrate(recs)}
   }catch(e){console.warn('Caption lookup failed',e)}})();
+  const chip=document.createElement('div'),cbar=bar.querySelector('.cbar'),U=40;let gen=false;
+  chip.className='cstat';chip.hidden=true;w.append(chip);
+  const cb0=null;
+  const runGen=async(eng,src,lim,wasPlaying)=>{
+    const rd=await makeReader(src),tot=rd.dur,N=Math.max(1,Math.ceil(tot/U)),done=new Set(),raw=[],rms=[],t0=performance.now();
+    let proc=0,head=2,paused=false,fail=null,k=0;gen=true;chip.hidden=false;cbar.hidden=false;chip.textContent='Preparing a head start…';
+    const unitAt=()=>Math.min(N-1,Math.floor(el.currentTime/U));
+    const gate=()=>{if(!done.has(unitAt())&&!el.paused){paused=true;el.pause();chip.textContent='Waiting for captions…'}};
+    const draw=()=>{let h='',s=-1;for(let u=0;u<=N;u++){const d=u<N&&done.has(u);if(d&&s<0)s=u;if(!d&&s>=0){h+=`<i style="left:${s*U/tot*100}%;width:${Math.min(100,(u-s)*U/tot*100)}%"></i>`;s=-1}}cbar.innerHTML=h};
+    el.addEventListener('timeupdate',gate);el.addEventListener('seeking',gate);
+    while(done.size<N){
+      if(k++%6===0){const m=await memInfo(),mb=x=>Math.round(x/1e6);if(m.total>lim){fail=Error(`Stopped to protect your device: this tab reached ${mb(m.total)} MB of RAM (JavaScript ${mb(m.js)} MB, threaded engine ${mb(m.shared)} MB, everything else ${mb(Math.max(0,m.total-m.js-m.shared))} MB; limit ${mb(lim)} MB). The captions made so far are kept. Close other tabs and try again, or choose the CPU option.`);break}}
+      let u=unitAt(),g=0;while(done.has(u)&&g++<N)u=(u+1)%N;   /* always the next unfinished piece at or after the playhead */
+      const a=u*U,b=Math.min(tot,a+U);
+      try{raw.push(...await processUnit(eng,rd,a,b,rms))}catch(e){fail=e;break}
+      done.add(u);proc+=b-a;raw.sort((x,y)=>x.a-y.a);cues=chunkCues(raw);show();draw();
+      const s=(performance.now()-t0)/1000;chip.textContent=`Captions ${Math.round(done.size/N*100)}% · about ${eta(s/Math.max(proc,1)*(tot-proc))} left`;
+      if(head>0&&--head===0&&wasPlaying&&el.paused&&!paused)el.play().catch(()=>{});
+      if(paused&&done.has(unitAt())){paused=false;el.play().catch(()=>{})}
+    }
+    el.removeEventListener('timeupdate',gate);el.removeEventListener('seeking',gate);gen=false;chip.hidden=true;
+    return{ok:!fail&&done.size>=N,fail};
+  };
   const cb=mkBusy(w,ov,e=>askToast(/memory|alloc|RangeError/i.test((e&&e.name)+' '+(e&&e.message))?'Your device ran out of memory while generating captions. Close other tabs and apps and try again. OPTIC already works through the video in 5-minute pieces, so if this keeps happening the speech engine itself is too heavy for this device.':why(e),['OK']));
   bar.addEventListener('click',async e=>{
     const b=e.target.closest('[data-a]'),a=b&&b.dataset.a;if(a==='cs')return void(cs.hidden=!cs.hidden);if(a!=='cc')return;
-    await initP;if(cues)return setOn(!on);
-    if(await askToast('Captions are generated ahead of time, not live. OPTIC will download the transcription engine and speech model once (roughly 60–130 MB, kept on this device), then transcribe the whole video before captions appear. Load captions?',['Load captions','Not now']))return;
-    el.pause();
+    await initP;if(gen||(cues&&cues.length))return setOn(!on);
+    if(await askToast('Captions are generated ahead of time, not live. OPTIC downloads the speech engine, speech model and a voice-detection model once (roughly 65–135 MB, kept on this device), prepares a head start from where you are, then keeps generating while you watch. A grey bar on the seek bar shows how far captions have got. Load captions?',['Load captions','Not now']))return;
+    const wasPlaying=!el.paused;el.pause();
     /* any video the browser can decode works: only the audio is read, so no conversion is needed */
     const src=f,[,lab]=await sniff(f),tgt=['MP4','MOV','WebM/MKV'].includes(lab)?{f,h:o.handle}:null;
-    let segs=null,eng=null,ok=false,gpu=await hasGpu();
+    let eng=null,gpu=await hasGpu();
     const low=(navigator.deviceMemory||8)<=4||(navigator.hardwareConcurrency||8)<=4,lim=low?900e6:2e9;
     if(gpu&&low){const c=await askToast(`This device has limited RAM (about ${navigator.deviceMemory||'a few'} GB). GPU captions will use a lightweight model (a little less accurate) to stay under about 900 MB, but a weak graphics chip can still struggle. Which do you want?`,['GPU, lightweight model','CPU (slower, safest)','Cancel']);if(c===2)return;if(c===1)gpu=false}
     else if(!gpu&&await askToast(`This device has no WebGPU, so transcription runs on the CPU and can take about as long as the video itself${el.duration?' (roughly '+Math.round(el.duration/60)+' min)':''}. Continue anyway?`,['Continue','Cancel']))return;
-    const tv=el.currentTime,u0=el.currentSrc,unpark=()=>{if(u0){el.src=u0;el.addEventListener('loadedmetadata',()=>{el.currentTime=tv},{once:true})}};
-    el.pause();el.removeAttribute('src');el.load();
     await cb('Downloading captions engine (one time)…',async ui=>{
       if(gpu)try{eng=await ensureGpu(ui,low)}catch(e){console.warn('GPU captions unavailable:',e);gpu=false;askToast('GPU captions couldn’t start ('+((e&&e.message)||e)+'). Falling back to the slower CPU engine.',['OK'])}
       if(!eng){await ensureEngine(ui);const th=Math.max(1,Math.min(2,(navigator.hardwareConcurrency||2)>>1));
         eng={run:async pcm=>{TR._loadAudio=async()=>pcm;return parseCues(await TR.transcribe(new File([new Uint8Array(1)],'audio.wav'),{lang:'auto',threads:th,token_timestamps:false}))}}}
+      await ensureVad(ui);
     });
-    if(!eng){unpark();return}
-    const t0=performance.now();
-    await cb(gpu?'Transcribing on your GPU…':'Transcribing on your CPU…',async ui=>{
-      segs=[];ui.prog(0,'estimating time…');
-      await extractChunks(src,low?60:120,async(pcm,start,frac)=>{
-        const m=await memInfo(),mb=x=>Math.round(x/1e6);if(m.total>lim)throw Error(`Stopped to protect your device: this tab reached ${mb(m.total)} MB of RAM (JavaScript ${mb(m.js)} MB, threaded engine ${mb(m.shared)} MB, everything else ${mb(Math.max(0,m.total-m.js-m.shared))} MB; limit ${mb(lim)} MB). Close other tabs and try again, or choose the CPU option.`);
-        (await eng.run(pcm)).forEach(c=>segs.push({a:c.a+start,b:c.b+start,t:c.t}));
-        const s=(performance.now()-t0)/1000;ui.prog(frac,frac<.995?'about '+eta(s/Math.max(frac,.001)*(1-frac))+' left':'finishing…')});ok=true;
-    });
-    await freeEngines();unpark();if(!ok)return;cues=chunkCues(segs);if(!cues.length)return askToast('No speech was detected in this video.'+(TRLOG.length?' Engine log: '+TRLOG.slice(-3).join(' | ').slice(0,300):''),['OK']);
-    setOn(true);await persistCaps(tgt,lab);
+    if(!eng||!VAD){await freeEngines();return}
+    cues=[];setOn(true);
+    let r;try{r=await runGen(eng,src,lim,wasPlaying)}catch(e){r={ok:false,fail:e}}
+    await freeEngines();
+    if(r.fail)askToast(/memory|alloc|RangeError/i.test((r.fail.name||'')+' '+(r.fail.message||''))&&!/Stopped to protect/.test(r.fail.message||'')?'Your device ran out of memory while generating captions. The captions made so far are kept.':why(r.fail),['OK']);
+    if(r.ok){if(!cues.length)return askToast('No speech was detected in this video.',['OK']);await persistCaps(tgt,lab)}
   });
 }
 function mkPlayer(f,kind,o={}){
@@ -746,7 +822,7 @@ function mkPlayer(f,kind,o={}){
   const el=document.createElement(kind),w=document.createElement('div'),bar=document.createElement('div'),cache={};let url,raf,fell=0;
   w.className=`pl ${kind}`;bar.className='bar';el.playsInline=true;el.preload='metadata';
   const set=b=>{url&&URL.revokeObjectURL(url);el.src=url=URL.createObjectURL(b)};
-  bar.innerHTML=`<div class="seek"><span class="tm">0:00</span><input type="range" class="sk" min="0" max="1000" value="0" aria-label="Seek"><span class="tm">0:00</span></div><div class="ctl">${kind==='video'?`<button data-a="rw" title="Back 10 seconds" aria-label="Back 10 seconds">${svg('rw')}</button>`:''}<button data-a="p" title="Play / pause" aria-label="Play or pause">${svg('play')}</button>${kind==='video'?`<button data-a="fw" title="Forward 10 seconds" aria-label="Forward 10 seconds">${svg('fw')}</button>`:''}${kind==='audio'?`<button data-a="l" title="Loop" aria-label="Loop">${svg('loop')}</button>`:''}<button data-a="m" title="Mute" aria-label="Mute">${svg('vol')}</button><input type="range" class="vl" min="0" max="1" step=".01" value="1" aria-label="Volume"><span class="gap"></span>${kind==='video'?`<button data-a="cc" title="Captions" aria-label="Captions">${svg('cc')}</button><button data-a="cs" title="Caption settings" aria-label="Caption settings" hidden>${svg('tune')}</button>`:''}<select class="sp" title="Playback speed">${[.5,.75,1,1.25,1.5,2].map(s=>`<option value="${s}"${s===1?' selected':''}>${s}×</option>`).join('')}</select>${kind==='video'?`<select class="ql" title="Quality"></select>${document.pictureInPictureEnabled?`<button data-a="i" title="Picture in picture" aria-label="Picture in picture">${svg('pip')}</button>`:''}<button data-a="f" title="Fullscreen" aria-label="Fullscreen">${svg('fs')}</button>`:''}</div>`;
+  bar.innerHTML=`<div class="seek"><span class="tm">0:00</span><input type="range" class="sk" min="0" max="1000" value="0" aria-label="Seek"><span class="tm">0:00</span></div><div class="cbar" hidden></div><div class="ctl">${kind==='video'?`<button data-a="rw" title="Back 10 seconds" aria-label="Back 10 seconds">${svg('rw')}</button>`:''}<button data-a="p" title="Play / pause" aria-label="Play or pause">${svg('play')}</button>${kind==='video'?`<button data-a="fw" title="Forward 10 seconds" aria-label="Forward 10 seconds">${svg('fw')}</button>`:''}${kind==='audio'?`<button data-a="l" title="Loop" aria-label="Loop">${svg('loop')}</button>`:''}<button data-a="m" title="Mute" aria-label="Mute">${svg('vol')}</button><input type="range" class="vl" min="0" max="1" step=".01" value="1" aria-label="Volume"><span class="gap"></span>${kind==='video'?`<button data-a="cc" title="Captions" aria-label="Captions">${svg('cc')}</button><button data-a="cs" title="Caption settings" aria-label="Caption settings" hidden>${svg('tune')}</button>`:''}<select class="sp" title="Playback speed">${[.5,.75,1,1.25,1.5,2].map(s=>`<option value="${s}"${s===1?' selected':''}>${s}×</option>`).join('')}</select>${kind==='video'?`<select class="ql" title="Quality"></select>${document.pictureInPictureEnabled?`<button data-a="i" title="Picture in picture" aria-label="Picture in picture">${svg('pip')}</button>`:''}<button data-a="f" title="Fullscreen" aria-label="Fullscreen">${svg('fs')}</button>`:''}</div>`;
   const ov=document.createElement('div');ov.className='ov';ov.innerHTML=OV;w.append(el,bar,ov);const q=s=>bar.querySelector(s),pb=q('[data-a=p]'),sk=q('.sk'),tm=bar.querySelectorAll('.tm'),ql=q('.ql');
   const upd=()=>{pb.innerHTML=svg(el.paused?'play':'pause');w.classList.toggle('playing',!el.paused)};
   el.onplay=el.onpause=el.onended=upd;
@@ -754,6 +830,7 @@ function mkPlayer(f,kind,o={}){
   sk.oninput=()=>{sk.drag=1;el.currentTime=sk.value/1000*el.duration};sk.onchange=()=>sk.drag=0;
   el.onvolumechange=()=>{q('[data-a=m]').innerHTML=svg(el.muted||!el.volume?'mute':'vol')};
   q('.vl').oninput=e=>{el.volume=+e.target.value;el.muted=false};
+  q('.mc').onchange=e=>{mono=e.target.value==='m'?1:0;setMix()};
   q('.sp').onchange=e=>{const to=+e.target.value,from=el.playbackRate,t0=performance.now(),s=n=>{const k=Math.min(1,(n-t0)/500);el.playbackRate=from+(to-from)*k*k*(3-2*k);if(k<1)raf=requestAnimationFrame(s)};cancelAnimationFrame(raf);raf=requestAnimationFrame(s)};
   bar.onclick=e=>{const b=e.target.closest('[data-a]'),a=b&&b.dataset.a;if(!a)return;
     if(a==='p')el.paused?el.play():el.pause();
@@ -780,7 +857,7 @@ function mkPlayer(f,kind,o={}){
 }
 function showOrig(){
   const o=$('#origp');o.replaceChildren();
-  o.append(cat==='image'?mkImage(file):mkPlayer(file,cat));
+  o.append(cat==='image'?mkImage(file):mkPlayer(file,cat,{primary:1}));
   $('#orig').hidden=false;
 }
 /* ---------- opened from the OS (File Handling API): preview only ---------- */
@@ -904,12 +981,13 @@ function mkAudio(fs,o={}){
   const w=document.createElement('div'),el=document.createElement('audio'),multi=fs.length>1,dpr=devicePixelRatio||1,meta=fs.map(f=>({t:f.name.replace(/\.[^.]*$/,''),a:'',img:''}));
   w.className='au'+(o.viewer?' vw':'')+(multi?' multi':'');el.preload='metadata';
   const bt=(a,tl,ic,c='')=>`<button data-a="${a}" class="${c}" title="${tl}" aria-label="${tl}">${svg(ic)}</button>`;
-  w.innerHTML=(multi?'<ul class="pls"></ul>':'')+`<div class="aum"><img class="cov" alt="" hidden><div class="ti"></div><div class="ar"></div><div class="wv"><canvas></canvas><span class="tt">0:00 / 0:00</span></div><div class="ctl cc">${multi?bt('s','Shuffle','shuf'):''}${multi?bt('pv','Previous','prev'):''}${bt('p','Play / pause','play','pbig')}${multi?bt('nx','Next','next'):''}<button data-a="l" class="lp" data-m="0" title="Loop" aria-label="Loop">${svg('loop')}</button></div><div class="ctl cc">${bt('e','Edit track info','edit')}<select class="sp" title="Playback speed">${[.5,.75,1,1.25,1.5,2].map(s=>`<option value="${s}"${s===1?' selected':''}>${s}×</option>`).join('')}</select><button data-a="m" title="Mute" aria-label="Mute">${svg('vol')}</button><input type="range" class="vl" min="0" max="1" step=".01" value="1" aria-label="Volume"></div></div>`;
+  w.innerHTML=(multi?'<ul class="pls"></ul>':'')+`<div class="aum"><img class="cov" alt="" hidden><div class="ti"></div><div class="ar"></div><div class="wv"><canvas></canvas><span class="tt">0:00 / 0:00</span></div><div class="ctl cc">${multi?bt('s','Shuffle','shuf'):''}${multi?bt('pv','Previous','prev'):''}${bt('p','Play / pause','play','pbig')}${multi?bt('nx','Next','next'):''}<button data-a="l" class="lp" data-m="0" title="Loop" aria-label="Loop">${svg('loop')}</button></div><div class="ctl cc">${bt('e','Edit track info','edit')}<select class="mc" title="Channels"><option value="s" selected>Stereo</option><option value="m">Mono</option></select><select class="sp" title="Playback speed">${[.5,.75,1,1.25,1.5,2].map(s=>`<option value="${s}"${s===1?' selected':''}>${s}×</option>`).join('')}</select><button data-a="m" title="Mute" aria-label="Mute">${svg('vol')}</button><input type="range" class="vl" min="0" max="1" step=".01" value="1" aria-label="Volume"></div></div>`;
   const q=s=>w.querySelector(s),cv=q('canvas'),g=cv.getContext('2d'),pls=q('.pls');
   if(pls)fs.forEach(()=>pls.append(document.createElement('li')));
   const ov=document.createElement('div');ov.className='ov';ov.innerHTML=OV;w.append(ov);
   const busy=mkBusy(w,ov,e=>{q('.ar').hidden=false;q('.ar').textContent=why(e)});
-  let cur=0,mode=0,shuf=0,url,raf,fell=0,AC,an,fd,ph=0,pos=0,last=[];
+  let cur=0,mode=0,shuf=0,url,raf,fell=0,AC,an,fd,ph=0,pos=0,last=[],mix,mono=0;
+  const setMix=()=>{if(!mix)return;mix.channelCount=mono?1:2;mix.channelCountMode=mono?'explicit':'max';mix.channelInterpretation='speakers'};
   const same=(a,b)=>a.length===b.length&&a.every((x,i)=>x===b[i]);
   /* default order: by artist A-Z, then title; shuffle = a fresh queue (current song first), never the same as the previous one */
   const sortedOrder=()=>fs.map((_,i)=>i).sort((a,b)=>{const k=i=>[(meta[i].a||'\uffff').toLowerCase(),meta[i].t.toLowerCase()],x=k(a),y=k(b);return x[0]<y[0]?-1:x[0]>y[0]?1:x[1]<y[1]?-1:x[1]>y[1]?1:a-b});
@@ -919,6 +997,7 @@ function mkAudio(fs,o={}){
   const ms=()=>{if(!('mediaSession'in navigator))return;const m=meta[cur];navigator.mediaSession.metadata=new MediaMetadata({title:m.t,artist:m.a,album:multi?'OPTIC playlist':'',artwork:m.img?[{src:m.img,sizes:'512x512'}]:[]})};
   const show=()=>{const m=meta[cur];q('.ti').textContent=m.t;q('.ar').textContent=m.a;q('.ar').hidden=!m.a;const c=q('.cov');c.hidden=!m.img;if(m.img)c.src=m.img;
     if(pls)pls.replaceChildren(...order.map((i,n)=>{const li=document.createElement('li'),s=document.createElement('span'),sm=document.createElement('small');li.dataset.i=i;li.className=i===cur?'on':'';s.textContent=`${n+1}. ${meta[i].t}`;sm.textContent=meta[i].a;sm.hidden=!meta[i].a;li.append(s,sm);return li}));
+    if(o.viewer||o.primary)document.title=(m.a?m.a+' – ':'')+m.t+' · OPTIC';
     ms()};
   const readMeta=async i=>{try{const M=await loadMB(),m=await new M.Input({source:new M.BlobSource(fs[i]),formats:M.ALL_FORMATS}).getMetadataTags(),im=m.images&&m.images[0];
     if(m.title){meta[i].t=m.title;meta[i].tt=1}if(m.artist){meta[i].a=m.artist;meta[i].at=1}if(im)meta[i].img=await trimCover(URL.createObjectURL(new Blob([im.data],{type:im.mimeType})))}catch{}if(!shuf){order=sortedOrder();pos=order.indexOf(cur)}show()};
@@ -947,7 +1026,7 @@ function mkAudio(fs,o={}){
     q('.tt').textContent=`${tf(el.currentTime)} / ${tf(el.duration)}`;
   }
   const rest=k=>.2+.08*Math.sin(k*.9),loop=()=>{draw();if(!el.paused||amp.some((a,k)=>Math.abs(a-rest(k))>.004))raf=requestAnimationFrame(loop)};
-  el.onplay=()=>{if(!AC)try{AC=new(window.AudioContext||webkitAudioContext)();const s=AC.createMediaElementSource(el);an=AC.createAnalyser();an.fftSize=1024;an.smoothingTimeConstant=.8;s.connect(an);an.connect(AC.destination);fd=new Uint8Array(an.frequencyBinCount)}catch{}AC&&AC.resume();upd();cancelAnimationFrame(raf);loop()};
+  el.onplay=()=>{if(!AC)try{AC=new(window.AudioContext||webkitAudioContext)();const s=AC.createMediaElementSource(el);an=AC.createAnalyser();an.fftSize=1024;an.smoothingTimeConstant=.8;mix=AC.createGain();setMix();s.connect(mix);mix.connect(an);an.connect(AC.destination);fd=new Uint8Array(an.frequencyBinCount)}catch{}AC&&AC.resume();upd();cancelAnimationFrame(raf);loop()};
   el.onpause=()=>{upd();cancelAnimationFrame(raf);loop()};el.ontimeupdate=el.ondurationchange=el.onseeked=()=>{if(el.paused)draw()};
   el.onvolumechange=()=>{q('[data-a=m]').innerHTML=svg(el.muted||!el.volume?'mute':'vol')};
   q('.vl').oninput=e=>{el.volume=+e.target.value;el.muted=false};
@@ -988,8 +1067,10 @@ function mkAudio(fs,o={}){
     if(k==='x')ae.hidden=true;
     if(k==='fix')try{aen.textContent='Checking…';const r=await repairMp3(fs[cur]);if(!r){aen.textContent='No damage found: the audio already starts where the tag says it should.';return}aen.textContent='Repairing…';await writeOut(r,false);aen.textContent='Repaired and saved.';go(cur,true)}catch(er){aen.textContent=er.name==='AbortError'?'':why(er)}
     if(k==='save'||k==='as')try{aen.textContent='Saving…';await saveTags(k==='as');aen.textContent='Saved.'}catch(er){aen.textContent=er.name==='AbortError'?'':why(er)}};
-  new ResizeObserver(resize).observe(cv);go(0,false);fs.forEach((_,i)=>setTimeout(()=>readMeta(i),i*30));
-  if(o.auto)el.play().catch(()=>{el.muted=true;el.play().catch(()=>{})});
+  new ResizeObserver(resize).observe(cv);go(order[0],false);
+  /* a playlist starts from OPTIC's own order (artist A-Z), so wait briefly for every file's tags before picking the first song */
+  (async()=>{if(multi){await Promise.race([Promise.all(fs.map((_,i)=>readMeta(i))),new Promise(r=>setTimeout(r,4000))]);order=sortedOrder();go(order[0],false)}else readMeta(0);
+    if(o.auto)el.play().catch(()=>{el.muted=true;el.play().catch(()=>{})})})();
   return w;
 }
 /* ---------- opened from the OS or dropped as a playlist: preview only ---------- */
