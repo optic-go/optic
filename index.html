@@ -524,6 +524,7 @@ async function getAsset(name,url,type,ui,label){
   rec=new Blob(parts,{type});await idb.set('assets',name,rec).catch(()=>{});return rec;
 }
 let TR,GPUE;const TRLOG=[];
+const LANG=(navigator.language||'en').split('-')[0];
 const TFJS='https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/dist/transformers.min.js';
 const hasGpu=async()=>{try{return!!(navigator.gpu&&await navigator.gpu.requestAdapter())}catch{return false}};
 /* low-RAM safeguards: measure this tab's real memory use (Chrome, needs the isolated mode we already enable) */
@@ -546,7 +547,7 @@ async function getTf(ui){
 async function ensureGpu(ui,low){
   if(GPUE)return GPUE;
   const T=await getTf(ui),asr=await T.pipeline('automatic-speech-recognition',low?'onnx-community/whisper-tiny':'onnx-community/whisper-base',{device:'webgpu',dtype:{encoder_model:'fp32',decoder_model_merged:'q4'},progress_callback:d=>{if(d.status==='progress'&&d.progress!=null)ui.prog(d.progress/100)}});
-  return GPUE={dispose:()=>asr.dispose(),run:async pcm=>{const o=await asr(pcm,{chunk_length_s:30,stride_length_s:5,return_timestamps:true,task:'transcribe'});
+  return GPUE={dispose:()=>asr.dispose(),run:async pcm=>{const o=await asr(pcm,{chunk_length_s:30,stride_length_s:5,return_timestamps:true,task:'transcribe',language:LANG});
     return(o.chunks||[]).map(c=>({a:c.timestamp[0],b:c.timestamp[1]==null?c.timestamp[0]+2:c.timestamp[1],t:(c.text||'').trim()})).filter(x=>x.t)}};
 }
 /* Silero VAD (ONNX, runs on the CPU): finds where people are actually speaking so Whisper only sees speech */
@@ -557,14 +558,22 @@ async function ensureVad(ui){
 }
 async function vadRegions(pcm){
   const{T,model,sr}=VAD,W=512,n=Math.floor(pcm.length/W),pr=new Float32Array(n),dt=W/16000;
-  let state=new T.Tensor('float32',new Float32Array(256),[2,1,128]);
-  for(let i=0;i<n;i++){const o=await model({input:new T.Tensor('float32',pcm.slice(i*W,(i+1)*W),[1,W]),sr,state});state=o.stateN;pr[i]=o.output.data[0]}
-  const minS=Math.ceil(.25/dt),minG=Math.ceil(.35/dt),reg=[];let on=false,s=0,last=0;
-  for(let i=0;i<n;i++){const p=pr[i];if(!on&&p>=.5){on=true;s=i;last=i}else if(on){if(p>=.35)last=i;else if(i-last>=minG){if(last-s+1>=minS)reg.push([s,last+1]);on=false}}}
+  let state=new T.Tensor('float32',new Float32Array(256),[2,1,128]),ctx=new Float32Array(64),useCtx=VAD.ctx!==false;
+  /* Silero v5 expects the previous 64 samples in front of each 512-sample window; if this export doesn't, fall back to plain 512 */
+  for(let i=0;i<n;i++){
+    const w=pcm.subarray(i*W,(i+1)*W);let inp=w;if(useCtx){inp=new Float32Array(64+W);inp.set(ctx);inp.set(w,64)}
+    let o;try{o=await model({input:new T.Tensor('float32',inp,[1,inp.length]),sr,state})}catch(e){if(useCtx&&i===0){useCtx=false;VAD.ctx=false;i--;continue}throw e}
+    state=o.stateN;pr[i]=o.output.data[0];ctx=w.slice(W-64);
+  }
+  const minS=Math.ceil(.25/dt),minG=Math.ceil(.5/dt),reg=[];let on=false,s=0,last=0;
+  for(let i=0;i<n;i++){const p=pr[i];if(!on&&p>=.4){on=true;s=i;last=i}else if(on){if(p>=.25)last=i;else if(i-last>=minG){if(last-s+1>=minS)reg.push([s,last+1]);on=false}}}
   if(on&&last-s+1>=minS)reg.push([s,last+1]);
   const out=[],dur=pcm.length/16000;
-  for(const[a,b]of reg){const x=Math.max(0,a*dt-.15),y=Math.min(dur,b*dt+.15),l=out[out.length-1];if(l&&x-l.e<.3){l.e=y;l.b=b}else out.push({s:x,e:y,a,b})}
+  for(const[a,b]of reg){const x=Math.max(0,a*dt-.2),y=Math.min(dur,b*dt+.2),l=out[out.length-1];if(l&&x-l.e<.4){l.e=y;l.b=b}else out.push({s:x,e:y,a,b})}
   for(const r of out){let sp=0;for(let i=r.a;i<r.b;i++)sp+=pr[i];r.pm=sp/Math.max(1,r.b-r.a);const i0=Math.floor(r.s*16000),i1=Math.floor(r.e*16000);let sq=0;for(let i=i0;i<i1;i++)sq+=pcm[i]*pcm[i];r.rms=Math.sqrt(sq/Math.max(1,i1-i0))}
+  /* safety net: if the detector heard nothing but the audio is clearly not silent, let Whisper have the whole piece rather than dropping it */
+  if(!out.length){let sq=0;for(let i=0;i<pcm.length;i++)sq+=pcm[i]*pcm[i];const r=Math.sqrt(sq/Math.max(1,pcm.length));if(r>.012)out.push({s:0,e:dur,a:0,b:n,pm:.5,rms:r})}
+  console.log('[OPTIC captions] speech regions:',out.length,'of',dur.toFixed(0)+'s, speech '+out.reduce((x,r)=>x+r.e-r.s,0).toFixed(0)+'s');
   return out;
 }
 /* join speech regions into <=28 s windows (Whisper's window size) so it never wastes time on silence, then map timestamps back */
@@ -764,11 +773,11 @@ function attachCaps(P){
   };
   const initP=(async()=>{try{
     const[,l0]=await sniff(f),isM=['MP4','MOV','WebM/MKV'].includes(l0);
-    if(isM){const em=await readCaps(f,l0);if(em){cues=em;return}}
+    if(isM){const em=await readCaps(f,l0);if(em){cues=em;capSrc='the video file';return}}
     const recs=(await idb.entries('captions')).filter(([,v])=>v&&v.name===f.name&&v.cues).sort((a,b)=>b[1].at-a[1].at);
-    if(recs.length){cues=recs[0][1].cues;if(isM)migrate(recs)}
+    if(recs.length){cues=recs[0][1].cues;capSrc='OPTIC’s browser storage';if(isM)migrate(recs)}
   }catch(e){console.warn('Caption lookup failed',e)}})();
-  const chip=document.createElement('div'),cbar=bar.querySelector('.cbar'),U=40;let gen=false;
+  const chip=document.createElement('div'),cbar=bar.querySelector('.cbar'),U=40;let gen=false,decided=false,capSrc='';
   chip.className='cstat';chip.hidden=true;w.append(chip);
   const cb0=null;
   const runGen=async(eng,src,lim,wasPlaying)=>{
@@ -794,7 +803,12 @@ function attachCaps(P){
   const cb=mkBusy(w,ov,e=>askToast(/memory|alloc|RangeError/i.test((e&&e.name)+' '+(e&&e.message))?'Your device ran out of memory while generating captions. Close other tabs and apps and try again. OPTIC already works through the video in 5-minute pieces, so if this keeps happening the speech engine itself is too heavy for this device.':why(e),['OK']));
   bar.addEventListener('click',async e=>{
     const b=e.target.closest('[data-a]'),a=b&&b.dataset.a;if(a==='cs')return void(cs.hidden=!cs.hidden);if(a!=='cc')return;
-    await initP;if(gen||(cues&&cues.length))return setOn(!on);
+    await initP;if(gen)return setOn(!on);
+    if(cues&&cues.length){
+      if(decided)return setOn(!on);
+      const c=await askToast(`This video already has captions (${cues.length} lines, stored in ${capSrc||'this session'}). Use them, or generate new ones? Generating new ones replaces the old ones once they’re done.`,['Use existing captions','Generate new captions','Cancel']);
+      if(c===2)return;decided=true;if(c===0)return setOn(true);
+    }
     if(await askToast('Captions are generated ahead of time, not live. OPTIC downloads the speech engine, speech model and a voice-detection model once (roughly 65–135 MB, kept on this device), prepares a head start from where you are, then keeps generating while you watch. A grey bar on the seek bar shows how far captions have got. Load captions?',['Load captions','Not now']))return;
     const wasPlaying=!el.paused;el.pause();
     /* any video the browser can decode works: only the audio is read, so no conversion is needed */
@@ -806,11 +820,11 @@ function attachCaps(P){
     await cb('Downloading captions engine (one time)…',async ui=>{
       if(gpu)try{eng=await ensureGpu(ui,low)}catch(e){console.warn('GPU captions unavailable:',e);gpu=false;askToast('GPU captions couldn’t start ('+((e&&e.message)||e)+'). Falling back to the slower CPU engine.',['OK'])}
       if(!eng){await ensureEngine(ui);const th=Math.max(1,Math.min(2,(navigator.hardwareConcurrency||2)>>1));
-        eng={run:async pcm=>{TR._loadAudio=async()=>pcm;return parseCues(await TR.transcribe(new File([new Uint8Array(1)],'audio.wav'),{lang:'auto',threads:th,token_timestamps:false}))}}}
+        eng={run:async pcm=>{TR._loadAudio=async()=>pcm;return parseCues(await TR.transcribe(new File([new Uint8Array(1)],'audio.wav'),{lang:LANG,threads:th,token_timestamps:false}))}}}
       await ensureVad(ui);
     });
     if(!eng||!VAD){await freeEngines();return}
-    cues=[];setOn(true);
+    cues=[];setOn(true);capSrc='this session';decided=true;
     let r;try{r=await runGen(eng,src,lim,wasPlaying)}catch(e){r={ok:false,fail:e}}
     await freeEngines();
     if(r.fail)askToast(/memory|alloc|RangeError/i.test((r.fail.name||'')+' '+(r.fail.message||''))&&!/Stopped to protect/.test(r.fail.message||'')?'Your device ran out of memory while generating captions. The captions made so far are kept.':why(r.fail),['OK']);
