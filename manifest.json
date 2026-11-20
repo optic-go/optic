@@ -36,7 +36,8 @@
      ".ico",
      ".tif",
      ".tiff",
-     ".svg"
+     ".svg",
+     ".jxl"
     ],
     "audio/*": [
      ".mp3",
