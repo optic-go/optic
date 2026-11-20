@@ -1,4 +1,4 @@
-const V='optic-v6',S=self.registration.scope,U=p=>new URL(p,S).href,
+const V='optic-v7',S=self.registration.scope,U=p=>new URL(p,S).href,
 CORE=['./','index.html','manifest.json','icon-192.png','icon-512.png'].map(U),
 LIBS=['https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.cjs','https://cdn.jsdelivr.net/npm/mediabunny@1.61.3/dist/bundles/mediabunny.mjs','https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js'],
 M={ignoreSearch:true,ignoreVary:true};
@@ -35,7 +35,7 @@ self.addEventListener('fetch',e=>{
     let hit=await c.match(r,M);
     if(!hit&&r.mode==='navigate')hit=await c.match(U('./'),M)||await c.match(U('index.html'),M);
     if(hit&&!same)return hit;
-    const net=fetch(r).then(async res=>{if(res.ok&&(same||LIBS.includes(r.url)||/^https:\/\/cdn\.jsdelivr\.net\/npm\/@huggingface\//.test(r.url)))c.put(r,res.redirected?await clean(res):res.clone());return res}).catch(()=>null);
+    const net=fetch(r).then(async res=>{if(res.ok&&(same||LIBS.includes(r.url)||/^https:\/\/cdn\.jsdelivr\.net\/npm\/@huggingface\//.test(r.url)||/^https:\/\/unpkg\.com\/@jsquash\//.test(r.url)))c.put(r,res.redirected?await clean(res):res.clone());return res}).catch(()=>null);
     if(hit)return iso(r,hit);
     const res=await net;
     return res?iso(r,res):(r.mode==='navigate'?new Response('Offline',{status:503}):Response.error());
